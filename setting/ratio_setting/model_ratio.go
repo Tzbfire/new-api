@@ -723,6 +723,17 @@ func FormatMatchingModelName(name string) string {
 	if strings.HasPrefix(name, "gpt-4o-gizmo") {
 		name = "gpt-4o-gizmo-*"
 	}
+
+	// 剥离 OAI 推理力度后缀，使得带后缀的模型名（如 gpt-5.5-xhigh）
+	// 可以回退匹配到基础模型（gpt-5.5）所在的渠道，无需在渠道列表中重复配置后缀变体。
+	// 精确匹配优先，此处仅作 fallback 归一化，不影响显式配置了后缀模型名的渠道。
+	for _, suffix := range []string{"-xhigh", "-minimal", "-high", "-medium", "-low", "-none"} {
+		if strings.HasSuffix(name, suffix) {
+			name = strings.TrimSuffix(name, suffix)
+			break
+		}
+	}
+
 	return name
 }
 
