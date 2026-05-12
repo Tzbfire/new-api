@@ -874,6 +874,25 @@ func (channel *Channel) SetSetting(setting dto.ChannelSettings) {
 	channel.Setting = common.GetPointer[string](string(settingBytes))
 }
 
+// AllowsImageSizeTier 判断该渠道是否允许指定的图片分辨率档位（"1K"/"2K"/"4K"）。
+// 渠道未配置 SupportedImageSizeTiers 时（默认）返回 true，表示不限制。
+// tier 为空时也返回 true，避免对非图片请求误过滤。
+func (channel *Channel) AllowsImageSizeTier(tier string) bool {
+	if tier == "" {
+		return true
+	}
+	tiers := channel.GetSetting().SupportedImageSizeTiers
+	if len(tiers) == 0 {
+		return true
+	}
+	for _, t := range tiers {
+		if t == tier {
+			return true
+		}
+	}
+	return false
+}
+
 func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 	setting := dto.ChannelOtherSettings{}
 	if channel.OtherSettings != "" {

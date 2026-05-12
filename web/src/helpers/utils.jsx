@@ -765,12 +765,33 @@ export const calculateModelPrice = ({
     const priceUSD = parseFloat(record.model_price) * usedGroupRatio;
     const displayVal = displayPrice(priceUSD);
 
+    // 若模型按分辨率分级定价，构造 1K/2K/4K 三档价格供 UI 展示
+    const rawSizePrices =
+      record.size_prices && typeof record.size_prices === 'object'
+        ? record.size_prices
+        : null;
+    let sizePriceItems = null;
+    if (rawSizePrices) {
+      const tierOrder = ['1K', '2K', '4K'];
+      sizePriceItems = tierOrder
+        .filter(
+          (tier) =>
+            typeof rawSizePrices[tier] === 'number' && rawSizePrices[tier] > 0,
+        )
+        .map((tier) => ({
+          tier,
+          price: displayPrice(parseFloat(rawSizePrices[tier]) * usedGroupRatio),
+        }));
+      if (sizePriceItems.length === 0) sizePriceItems = null;
+    }
+
     return {
       price: displayVal,
       isPerToken: false,
       isTokensDisplay: false,
       usedGroup,
       usedGroupRatio,
+      sizePriceItems,
     };
   }
 
@@ -894,6 +915,14 @@ export const getModelPriceItems = (
       value: priceData.price,
       suffix: ` / ${t('次')}`,
     },
+    ...(Array.isArray(priceData.sizePriceItems)
+      ? priceData.sizePriceItems.map((item) => ({
+          key: `size-${item.tier}`,
+          label: `${item.tier} ${t('分辨率')}`,
+          value: item.price,
+          suffix: ` / ${t('次')}`,
+        }))
+      : []),
   ].filter((item) => item.value !== null && item.value !== undefined && item.value !== '');
 };
 

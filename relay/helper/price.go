@@ -64,6 +64,14 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
 	modelPrice, usePrice := ratio_setting.GetModelPrice(info.OriginModelName, false)
 
+	// 按分辨率档位的绝对价覆盖（D-Plus 方案）：
+	// 当 dto 层在 GetTokenCountMeta 中检测到 ModelSizePrice 命中时，会写入 meta.ImagePriceOverride（USD/次）。
+	// 此处直接覆盖 modelPrice 并强制 usePrice=true，使后续走「按次计费」分支，跳过 ratio 计算。
+	if meta != nil && meta.ImagePriceOverride > 0 {
+		modelPrice = meta.ImagePriceOverride
+		usePrice = true
+	}
+
 	groupRatioInfo := HandleGroupRatio(c, info)
 
 	var preConsumedQuota int

@@ -77,6 +77,70 @@ const ASPECT_OPTIONS = [
   { label: '自动', value: 'auto' },
 ];
 
+// 比例 → 实际 size 的「档位 × 比例」映射表（D-Plus 方案）
+// 仅当模型配置了 size_prices 时启用，画室会显示「档位 + 比例」双控件。
+const ASPECT_KEYS = [
+  { key: '1:1', label: '1:1' },
+  { key: '3:2', label: '3:2' },
+  { key: '2:3', label: '2:3' },
+  { key: '16:9', label: '16:9' },
+  { key: '9:16', label: '9:16' },
+  { key: 'auto', label: '自动' },
+];
+
+const TIER_KEYS = ['1K', '2K', '4K'];
+
+// 档位 × 比例 → 实际 size 字符串
+// 与后端 setting/operation_setting/image_size_tier.go 的白名单保持一致
+const TIER_ASPECT_TO_SIZE = {
+  '1K': {
+    '1:1': '1024x1024',
+    '3:2': '1536x1024',
+    '2:3': '1024x1536',
+    '16:9': '1792x1024',
+    '9:16': '1024x1792',
+    auto: 'auto',
+  },
+  '2K': {
+    '1:1': '1920x1920',
+    '3:2': '2368x1576',
+    '2:3': '1576x2368',
+    '16:9': '2560x1440',
+    '9:16': '1440x2560',
+    auto: '1920x1920',
+  },
+  '4K': {
+    '1:1': '2880x2880',
+    '3:2': '3552x2368',
+    '2:3': '2368x3552',
+    '16:9': '3840x2160',
+    '9:16': '2160x3840',
+    auto: '2880x2880',
+  },
+};
+
+// size 字符串 → 档位（与后端 ClassifyImageSizeTier 对齐的简化版，仅识别白名单 size）
+const SIZE_TO_TIER = (() => {
+  const m = {};
+  Object.keys(TIER_ASPECT_TO_SIZE).forEach((tier) => {
+    Object.values(TIER_ASPECT_TO_SIZE[tier]).forEach((sz) => {
+      if (!m[sz]) m[sz] = tier;
+    });
+  });
+  return m;
+})();
+
+// size 字符串 → 比例 key
+const SIZE_TO_ASPECT = (() => {
+  const m = { auto: 'auto' };
+  Object.keys(TIER_ASPECT_TO_SIZE).forEach((tier) => {
+    Object.entries(TIER_ASPECT_TO_SIZE[tier]).forEach(([asp, sz]) => {
+      if (!m[sz]) m[sz] = asp;
+    });
+  });
+  return m;
+})();
+
 const PROMPT_PRESETS = [
   '电影感清晨薄雾森林特写，柔和金光，超写实',
   '极简主义产品大片：一台手机置于大理石台面，工作室灯光，写实质感',
@@ -391,6 +455,43 @@ const ImageStudio = () => {
     return 1;
   };
 
+  // 当前模型是否启用「分辨率档位定价」（D-Plus 方案）
+  const sizePrices = useMemo(() => {
+    const p = pricingMap[model];
+    return p && p.size_prices && Object.keys(p.size_prices).length > 0
+      ? p.size_prices
+      : null;
+  }, [pricingMap, model]);
+
+  // 模型有 size_prices 时，从当前 size 反推「档位 + 比例」用于 UI 选中态
+  const currentTier = useMemo(() => SIZE_TO_TIER[size] || '2K', [size]);
+  const currentAspect = useMemo(() => SIZE_TO_ASPECT[size] || '1:1', [size]);
+
+  // 切换档位/比例时，重组 size 字符串
+  const applyTierAspect = (tier, aspect) => {
+    const map = TIER_ASPECT_TO_SIZE[tier];
+    if (!map) return;
+    const next = map[aspect] || map['1:1'];
+    setSize(next);
+  };
+
+  // 各档位预估单张价格（quota 单位），用于档位 chip 上显示
+  const tierEstimates = useMemo(() => {
+    if (!sizePrices) return null;
+    const QUOTA_PER_UNIT = Number(
+      localStorage.getItem('quota_per_unit') || 500000,
+    );
+    const groupRatio = Number(groupRatioMap[group] ?? 1) || 1;
+    const out = {};
+    TIER_KEYS.forEach((tier) => {
+      const price = sizePrices[tier];
+      if (typeof price === 'number' && price > 0) {
+        out[tier] = price * QUOTA_PER_UNIT * groupRatio;
+      }
+    });
+    return out;
+  }, [sizePrices, groupRatioMap, group]);
+
   // 预估本次生成费用（quota 单位）
   const estimatedQuota = useMemo(() => {
     const p = pricingMap[model];
@@ -399,20 +500,25 @@ const ImageStudio = () => {
       localStorage.getItem('quota_per_unit') || 500000,
     );
     const groupRatio = Number(groupRatioMap[group] ?? 1) || 1;
-    const sizeRatio = computeSizeRatio(model, size);
     const count = Math.max(1, Number(n) || 1);
+    // D-Plus：分辨率档位定价优先
+    if (sizePrices) {
+      const tierPrice = sizePrices[currentTier];
+      if (typeof tierPrice === 'number' && tierPrice > 0) {
+        return tierPrice * QUOTA_PER_UNIT * groupRatio * count;
+      }
+    }
+    const sizeRatio = computeSizeRatio(model, size);
     if (p.quota_type === 1 && p.model_price > 0) {
-      // 按次计费：modelPrice(USD) * QuotaPerUnit * groupRatio * sizeRatio * n
       return p.model_price * QUOTA_PER_UNIT * groupRatio * sizeRatio * count;
     }
     if (p.quota_type === 0 && p.image_ratio && p.model_ratio) {
-      // 按 token 计费近似：使用 image_ratio * model_ratio * groupRatio * n
       return (
         p.image_ratio * p.model_ratio * QUOTA_PER_UNIT * groupRatio * count
       );
     }
     return null;
-  }, [pricingMap, groupRatioMap, model, group, size, n]);
+  }, [pricingMap, groupRatioMap, model, group, size, n, sizePrices, currentTier]);
 
   const handleGenerate = async () => {
     if (!canGenerate) return;
@@ -1025,28 +1131,96 @@ const ImageStudio = () => {
             )}
 
             {/* 参数 - 横排 chip 化 */}
-            <div className='grid grid-cols-2 gap-3'>
-              <div>
-                <Text size='small' type='tertiary'>{t('比例')}</Text>
-                <Select
-                  className='!w-full mt-1'
-                  value={size}
-                  onChange={setSize}
-                  optionList={ASPECT_OPTIONS}
-                />
+            {sizePrices ? (
+              <>
+                <div>
+                  <Text size='small' type='tertiary'>{t('分辨率')}</Text>
+                  <div className='flex gap-2 mt-1 flex-wrap'>
+                    {TIER_KEYS.map((tier) => {
+                      const enabled =
+                        typeof sizePrices[tier] === 'number' && sizePrices[tier] > 0;
+                      const active = currentTier === tier;
+                      return (
+                        <button
+                          key={tier}
+                          type='button'
+                          disabled={!enabled}
+                          onClick={() => applyTierAspect(tier, currentAspect)}
+                          className={[
+                            'px-3 py-1.5 rounded-lg text-xs border transition flex flex-col items-center min-w-[64px]',
+                            active
+                              ? 'bg-purple-500 border-purple-500 text-white'
+                              : enabled
+                                ? 'bg-semi-color-bg-2 border-semi-color-border hover:border-purple-400'
+                                : 'bg-semi-color-bg-1 border-semi-color-border opacity-40 cursor-not-allowed',
+                          ].join(' ')}
+                        >
+                          <span className='font-semibold'>{tier}</span>
+                          {enabled && tierEstimates && tierEstimates[tier] != null && (
+                            <span className='text-[10px] opacity-80 mt-0.5'>
+                              ≈ {renderQuota(tierEstimates[tier], 4)}
+                            </span>
+                          )}
+                          {!enabled && (
+                            <span className='text-[10px] opacity-60 mt-0.5'>
+                              {t('未配置')}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className='grid grid-cols-2 gap-3'>
+                  <div>
+                    <Text size='small' type='tertiary'>{t('比例')}</Text>
+                    <Select
+                      className='!w-full mt-1'
+                      value={currentAspect}
+                      onChange={(v) => applyTierAspect(currentTier, v)}
+                      optionList={ASPECT_KEYS.map((a) => ({
+                        label: t(a.label),
+                        value: a.key,
+                      }))}
+                    />
+                  </div>
+                  <div>
+                    <Text size='small' type='tertiary'>{t('数量')}</Text>
+                    <InputNumber
+                      className='!w-full mt-1'
+                      min={1}
+                      max={4}
+                      step={1}
+                      value={n}
+                      onChange={(v) => setN(Number(v) || 1)}
+                    />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className='grid grid-cols-2 gap-3'>
+                <div>
+                  <Text size='small' type='tertiary'>{t('比例')}</Text>
+                  <Select
+                    className='!w-full mt-1'
+                    value={size}
+                    onChange={setSize}
+                    optionList={ASPECT_OPTIONS}
+                  />
+                </div>
+                <div>
+                  <Text size='small' type='tertiary'>{t('数量')}</Text>
+                  <InputNumber
+                    className='!w-full mt-1'
+                    min={1}
+                    max={4}
+                    step={1}
+                    value={n}
+                    onChange={(v) => setN(Number(v) || 1)}
+                  />
+                </div>
               </div>
-              <div>
-                <Text size='small' type='tertiary'>{t('数量')}</Text>
-                <InputNumber
-                  className='!w-full mt-1'
-                  min={1}
-                  max={4}
-                  step={1}
-                  value={n}
-                  onChange={(v) => setN(Number(v) || 1)}
-                />
-              </div>
-            </div>
+            )}
 
             {/* 费用预估 */}
             <div className='flex items-center justify-between rounded-xl px-3 py-2 bg-gradient-to-r from-amber-50 to-rose-50 dark:from-amber-900/20 dark:to-rose-900/20 border border-amber-200/60 dark:border-amber-800/40'>

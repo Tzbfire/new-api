@@ -93,10 +93,82 @@ func SyncChannelCache(frequency int) {
 	}
 }
 
+// getChannelFromDBWithImageSizeTierFilter 在内存缓存禁用时，按图片分辨率档位从数据库选择渠道。
+//
+// 不同于 GetChannel 的「按 weight 单次随机命中」策略，本函数：
+//  1. 先按 group/model/retry 取出候选渠道全集；
+//  2. 加载这些渠道的完整 Channel 行（含 setting JSON）；
+//  3. 在 Go 侧按 AllowsImageSizeTier(tier) 过滤；
+//  4. 从过滤后的候选中按 weight+10 加权随机命中。
+//
+// 如此可保证非缓存模式下，渠道的 SupportedImageSizeTiers 限制依然生效。
+func getChannelFromDBWithImageSizeTierFilter(group string, model string, retry int, imageSizeTier string) (*Channel, error) {
+	if imageSizeTier == "" {
+		return GetChannel(group, model, retry)
+	}
+
+	channelQuery, err := getChannelQuery(group, model, retry)
+	if err != nil {
+		return nil, err
+	}
+	var abilities []Ability
+	if err := channelQuery.Order("weight DESC").Find(&abilities).Error; err != nil {
+		return nil, err
+	}
+	if len(abilities) == 0 {
+		return nil, nil
+	}
+
+	channelIds := make([]int, 0, len(abilities))
+	weightById := make(map[int]uint, len(abilities))
+	for _, a := range abilities {
+		channelIds = append(channelIds, a.ChannelId)
+		weightById[a.ChannelId] = a.Weight
+	}
+
+	var channels []Channel
+	if err := DB.Where("id IN ?", channelIds).Find(&channels).Error; err != nil {
+		return nil, err
+	}
+
+	filtered := make([]Channel, 0, len(channels))
+	for _, ch := range channels {
+		if ch.AllowsImageSizeTier(imageSizeTier) {
+			filtered = append(filtered, ch)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+
+	weightSum := uint(0)
+	for _, ch := range filtered {
+		weightSum += weightById[ch.Id] + 10
+	}
+	pick := common.GetRandomInt(int(weightSum))
+	for i := range filtered {
+		pick -= int(weightById[filtered[i].Id]) + 10
+		if pick <= 0 {
+			return &filtered[i], nil
+		}
+	}
+	return &filtered[len(filtered)-1], nil
+}
+
 func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel, error) {
+	return GetRandomSatisfiedChannelWithFilter(group, model, retry, "")
+}
+
+// GetRandomSatisfiedChannelWithFilter 在 GetRandomSatisfiedChannel 基础上增加按图片分辨率档位过滤。
+// imageSizeTier 为空时退化为不过滤的原行为；非空时只在候选渠道中保留 AllowsImageSizeTier(tier) 为 true 的。
+//
+// 「未配置 SupportedImageSizeTiers 的渠道」会被视为通用渠道，自动匹配任何档位 → 即天然兜底。
+// 因此当所有候选渠道都「明确声明」不支持当前档位时，本函数会返回 (nil, nil)，
+// 让上层走标准「无可用渠道」的错误路径，避免误把请求路由到明确拒绝该档位的渠道。
+func GetRandomSatisfiedChannelWithFilter(group string, model string, retry int, imageSizeTier string) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry)
+		return getChannelFromDBWithImageSizeTierFilter(group, model, retry, imageSizeTier)
 	}
 
 	channelSyncLock.RLock()
@@ -113,6 +185,19 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 
 	if len(channels) == 0 {
 		return nil, nil
+	}
+
+	if imageSizeTier != "" {
+		filtered := make([]int, 0, len(channels))
+		for _, id := range channels {
+			if ch, ok := channelsIDM[id]; ok && ch.AllowsImageSizeTier(imageSizeTier) {
+				filtered = append(filtered, id)
+			}
+		}
+		channels = filtered
+		if len(channels) == 0 {
+			return nil, nil
+		}
 	}
 
 	if len(channels) == 1 {

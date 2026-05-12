@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -25,6 +26,7 @@ import (
 type ModelRequest struct {
 	Model string `json:"model"`
 	Group string `json:"group,omitempty"`
+	Size  string `json:"size,omitempty"`
 }
 
 func Distribute() func(c *gin.Context) {
@@ -294,13 +296,32 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	}
 	if strings.HasPrefix(c.Request.URL.Path, "/v1/images/generations") || strings.HasPrefix(c.Request.URL.Path, "/pg/images/generations") {
 		modelRequest.Model = common.GetStringIfEmpty(modelRequest.Model, "dall-e")
+		// 仅在 JSON body 时尝试读取 size 字段；multipart/form-data 走下方分支。
+		if req, err := getModelFromRequest(c); err == nil && req != nil && req.Size != "" {
+			if tier := operation_setting.ClassifyImageSizeTier(req.Size); tier != "" {
+				common.SetContextKey(c, constant.ContextKeyRequestImageSizeTier, tier)
+			}
+		}
 	} else if strings.HasPrefix(c.Request.URL.Path, "/v1/images/edits") || strings.HasPrefix(c.Request.URL.Path, "/pg/images/edits") {
 		//modelRequest.Model = common.GetStringIfEmpty(c.PostForm("model"), "gpt-image-1")
 		contentType := c.ContentType()
 		if slices.Contains([]string{gin.MIMEPOSTForm, gin.MIMEMultipartPOSTForm}, contentType) {
 			req, err := getModelFromRequest(c)
-			if err == nil && req.Model != "" {
-				modelRequest.Model = req.Model
+			if err == nil && req != nil {
+				if req.Model != "" {
+					modelRequest.Model = req.Model
+				}
+				if req.Size != "" {
+					if tier := operation_setting.ClassifyImageSizeTier(req.Size); tier != "" {
+						common.SetContextKey(c, constant.ContextKeyRequestImageSizeTier, tier)
+					}
+				}
+			}
+		} else {
+			if req, err := getModelFromRequest(c); err == nil && req != nil && req.Size != "" {
+				if tier := operation_setting.ClassifyImageSizeTier(req.Size); tier != "" {
+					common.SetContextKey(c, constant.ContextKeyRequestImageSizeTier, tier)
+				}
 			}
 		}
 	}

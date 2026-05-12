@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -152,11 +153,21 @@ func (i *ImageRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	// image_handler.go (default) or channel adaptors (actual count).
 	// Including n here caused double-counting for channels that also
 	// set OtherRatio("n") (e.g. Ali/Bailian).
-	return &types.TokenCountMeta{
+	meta := &types.TokenCountMeta{
 		CombineText:     i.Prompt,
 		MaxTokens:       1584,
 		ImagePriceRatio: sizeRatio * qualityRatio,
 	}
+
+	// 按分辨率档位定价（D-Plus 方案）：
+	// 若管理员为该模型配置了 ModelSizePrice，则用对应档位价覆盖默认 modelPrice。
+	// 与 ImagePriceRatio 互斥：override 优先生效，并清空 ratio 避免被二次相乘。
+	if sizePrice, ok := ratio_setting.GetModelSizePrice(i.Model, i.Size); ok && sizePrice > 0 {
+		meta.ImagePriceOverride = sizePrice
+		meta.ImagePriceRatio = 0
+	}
+
+	return meta
 }
 
 func (i *ImageRequest) IsStream(c *gin.Context) bool {

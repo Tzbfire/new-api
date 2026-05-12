@@ -41,6 +41,7 @@ export default function ModelRatioSettings(props) {
   const [loading, setLoading] = useState(false);
   const [inputs, setInputs] = useState({
     ModelPrice: '',
+    ModelSizePrice: '',
     ModelRatio: '',
     CacheRatio: '',
     CreateCacheRatio: '',
@@ -160,6 +161,32 @@ export default function ModelRatioSettings(props) {
                 },
               ]}
               onChange={(value) => setInputs({ ...inputs, ModelPrice: value })}
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('模型分辨率分级价格')}
+              extraText={t(
+                '按分辨率档位（1K / 2K / 4K）独立定价，命中后会覆盖「模型固定价格」。AI 画室会自动展示档位选项与预估价。',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，键为模型名称，值为 {"1K": 单价, "2K": 单价, "4K": 单价}（USD/次）。例如 {"gpt-image-2": {"1K": 0.04, "2K": 0.08, "4K": 0.16}}',
+              )}
+              field={'ModelSizePrice'}
+              autosize={{ minRows: 4, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, ModelSizePrice: value })
+              }
             />
           </Col>
         </Row>

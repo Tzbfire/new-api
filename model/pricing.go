@@ -23,6 +23,7 @@ type Pricing struct {
 	QuotaType              int                     `json:"quota_type"`
 	ModelRatio             float64                 `json:"model_ratio"`
 	ModelPrice             float64                 `json:"model_price"`
+	SizePrices             map[string]float64      `json:"size_prices,omitempty"`
 	OwnerBy                string                  `json:"owner_by"`
 	CompletionRatio        float64                 `json:"completion_ratio"`
 	CacheRatio             *float64                `json:"cache_ratio,omitempty"`
@@ -301,6 +302,14 @@ func updatePricing() {
 			pricing.ModelRatio = modelRatio
 			pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
 			pricing.QuotaType = 0
+		}
+		// 按分辨率档位定价（D-Plus 方案）：暴露给前端用于展示和「画室」预估
+		if sizeTiers := ratio_setting.GetModelSizePriceTiers(model); len(sizeTiers) > 0 {
+			pricing.SizePrices = sizeTiers
+			// 若 ModelPrice 未设但 SizePrices 有值，按次计费类型也成立
+			if !findPrice {
+				pricing.QuotaType = 1
+			}
 		}
 		if cacheRatio, ok := ratio_setting.GetCacheRatio(model); ok {
 			pricing.CacheRatio = &cacheRatio

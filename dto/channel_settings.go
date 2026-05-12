@@ -7,6 +7,9 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	// SupportedImageSizeTiers 限制此渠道接受的图片分辨率档位（"1K"/"2K"/"4K"）。
+	// 留空表示不限制。仅对图片生成路径生效，且只参与初次渠道选择，不影响重试时的兜底。
+	SupportedImageSizeTiers []string `json:"supported_image_size_tiers,omitempty"`
 }
 
 type VertexKeyType string

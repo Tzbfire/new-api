@@ -7,6 +7,10 @@ const (
 	ContextKeyPromptTokens    ContextKey = "prompt_tokens"
 	ContextKeyEstimatedTokens ContextKey = "estimated_tokens"
 
+	// ContextKeyRequestImageSizeTier 标记当前图片生成请求归一化后的分辨率档位（"1K"/"2K"/"4K"）。
+	// 由 distributor 中间件解析请求 body 得到，供渠道选择时按 ChannelSettings.SupportedImageSizeTiers 过滤。
+	ContextKeyRequestImageSizeTier ContextKey = "request_image_size_tier"
+
 	ContextKeyOriginalModel    ContextKey = "original_model"
 	ContextKeyRequestStartTime ContextKey = "request_start_time"
 
