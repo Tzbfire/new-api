@@ -297,11 +297,11 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		session := &BillingSession{
 			relayInfo: relayInfo,
 			funding: &SubscriptionFunding{
-					requestId: relayInfo.RequestId,
-					userId:    relayInfo.UserId,
-					modelName: relayInfo.OriginModelName,
-					usingGroup: relayInfo.UsingGroup,
-					amount:    subConsume,
+				requestId:  relayInfo.RequestId,
+				userId:     relayInfo.UserId,
+				modelName:  relayInfo.OriginModelName,
+				usingGroup: relayInfo.UsingGroup,
+				amount:     subConsume,
 			},
 		}
 		// 必须传 subConsume 而非 preConsumedQuota，保证 SubscriptionFunding.amount、
@@ -339,6 +339,16 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		session, apiErr := trySubscription()
 		if apiErr != nil {
 			if apiErr.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
+				walletFallbackDisabled, walletFallbackCheckErr := model.HasWalletFallbackDisabledSubscription(relayInfo.UserId, relayInfo.UsingGroup)
+				if walletFallbackCheckErr != nil {
+					return nil, types.NewError(walletFallbackCheckErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+				}
+				if walletFallbackDisabled {
+					return nil, types.NewErrorWithStatusCode(
+						fmt.Errorf("当前分组已配置仅使用订阅额度，订阅额度不足或不可用"),
+						types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
+						types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+				}
 				return tryWallet()
 			}
 			return nil, apiErr

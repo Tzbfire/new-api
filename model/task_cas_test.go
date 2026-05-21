@@ -72,6 +72,38 @@ func insertTask(t *testing.T, task *Task) {
 	require.NoError(t, DB.Create(task).Error)
 }
 
+func insertSubscriptionPlanForWalletFallbackTest(t *testing.T, id int, allowedGroups string, disabled bool) {
+	t.Helper()
+	plan := &SubscriptionPlan{
+		Id:                    id,
+		Title:                 "Fallback Plan",
+		PriceAmount:           1,
+		Currency:              "USD",
+		DurationUnit:          SubscriptionDurationMonth,
+		DurationValue:         1,
+		Enabled:               true,
+		AllowedTokenGroups:    allowedGroups,
+		DisableWalletFallback: disabled,
+		TotalAmount:           1000,
+	}
+	require.NoError(t, DB.Create(plan).Error)
+}
+
+func insertUserSubscriptionForWalletFallbackTest(t *testing.T, userId int, planId int) {
+	t.Helper()
+	now := time.Now().Unix()
+	sub := &UserSubscription{
+		UserId:      userId,
+		PlanId:      planId,
+		AmountTotal: 1000,
+		AmountUsed:  1000,
+		Status:      "active",
+		StartTime:   now - 60,
+		EndTime:     now + 3600,
+	}
+	require.NoError(t, DB.Create(sub).Error)
+}
+
 // ---------------------------------------------------------------------------
 // Snapshot / Equal — pure logic tests (no DB)
 // ---------------------------------------------------------------------------
@@ -87,6 +119,52 @@ func TestSnapshotEqual_Same(t *testing.T) {
 		Data:       json.RawMessage(`{"key":"value"}`),
 	}
 	assert.True(t, s.Equal(s))
+}
+
+func TestHasWalletFallbackDisabledSubscription(t *testing.T) {
+	t.Run("matching scoped plan blocks fallback", func(t *testing.T) {
+		truncateTables(t)
+
+		insertSubscriptionPlanForWalletFallbackTest(t, 501, "vip,image", true)
+		insertUserSubscriptionForWalletFallbackTest(t, 601, 501)
+
+		blocked, err := HasWalletFallbackDisabledSubscription(601, "image")
+		require.NoError(t, err)
+		assert.True(t, blocked)
+	})
+
+	t.Run("non matching group does not block fallback", func(t *testing.T) {
+		truncateTables(t)
+
+		insertSubscriptionPlanForWalletFallbackTest(t, 502, "vip,image", true)
+		insertUserSubscriptionForWalletFallbackTest(t, 602, 502)
+
+		blocked, err := HasWalletFallbackDisabledSubscription(602, "default")
+		require.NoError(t, err)
+		assert.False(t, blocked)
+	})
+
+	t.Run("unscoped plan does not block fallback", func(t *testing.T) {
+		truncateTables(t)
+
+		insertSubscriptionPlanForWalletFallbackTest(t, 503, "", true)
+		insertUserSubscriptionForWalletFallbackTest(t, 603, 503)
+
+		blocked, err := HasWalletFallbackDisabledSubscription(603, "default")
+		require.NoError(t, err)
+		assert.False(t, blocked)
+	})
+
+	t.Run("disabled flag does not block fallback", func(t *testing.T) {
+		truncateTables(t)
+
+		insertSubscriptionPlanForWalletFallbackTest(t, 504, "image", false)
+		insertUserSubscriptionForWalletFallbackTest(t, 604, 504)
+
+		blocked, err := HasWalletFallbackDisabledSubscription(604, "image")
+		require.NoError(t, err)
+		assert.False(t, blocked)
+	})
 }
 
 func TestSnapshotEqual_DifferentStatus(t *testing.T) {

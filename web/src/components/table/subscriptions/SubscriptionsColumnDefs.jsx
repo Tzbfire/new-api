@@ -105,6 +105,12 @@ const renderPlanTitle = (text, record, t) => {
         <Text>{plan?.upgrade_group ? plan.upgrade_group : t('不升级')}</Text>
         <Text type='tertiary'>{t('允许分组')}</Text>
         <Text>{formatAllowedTokenGroups(plan, t)}</Text>
+        <Text type='tertiary'>{t('钱包回退')}</Text>
+        <Text>
+          {plan?.disable_wallet_fallback
+            ? t('订阅用尽不扣钱包')
+            : t('允许回退钱包')}
+        </Text>
         <Text type='tertiary'>{t('购买上限')}</Text>
         <Text>
           {plan?.max_purchase_per_user > 0
@@ -209,7 +215,16 @@ const renderUpgradeGroup = (text, record, t) => {
 const renderAllowedTokenGroups = (text, record, t) => {
   const value = formatAllowedTokenGroups(record?.plan, t);
   const isUnlimited = !record?.plan?.allowed_token_groups;
-  return <Text type={isUnlimited ? 'tertiary' : 'secondary'}>{value}</Text>;
+  return (
+    <Space spacing={4} wrap>
+      <Text type={isUnlimited ? 'tertiary' : 'secondary'}>{value}</Text>
+      {record?.plan?.disable_wallet_fallback && (
+        <Tag size='small' color='red' type='light'>
+          {t('不扣钱包')}
+        </Tag>
+      )}
+    </Space>
+  );
 };
 
 const renderResetPeriod = (text, record, t) => {

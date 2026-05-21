@@ -96,6 +96,7 @@ const AddEditSubscriptionModal = ({
     total_amount: 0,
     upgrade_group: '',
     allowed_token_groups: [],
+    disable_wallet_fallback: false,
     stripe_price_id: '',
     creem_product_id: '',
   });
@@ -128,6 +129,7 @@ const AddEditSubscriptionModal = ({
             .map((group) => group.trim())
             .filter(Boolean)
         : [],
+      disable_wallet_fallback: p.disable_wallet_fallback === true,
       stripe_price_id: p.stripe_price_id || '',
       creem_product_id: p.creem_product_id || '',
     };
@@ -174,6 +176,7 @@ const AddEditSubscriptionModal = ({
           allowed_token_groups: Array.isArray(values.allowed_token_groups)
             ? values.allowed_token_groups.join(',')
             : '',
+          disable_wallet_fallback: values.disable_wallet_fallback === true,
         },
       };
       if (editingPlan?.plan?.id) {
@@ -370,6 +373,17 @@ const AddEditSubscriptionModal = ({
                           </Select.Option>
                         ))}
                       </Form.Select>
+                    </Col>
+
+                    <Col span={12}>
+                      <Form.Switch
+                        field='disable_wallet_fallback'
+                        label={t('订阅用尽不扣钱包')}
+                        size='large'
+                        extraText={t(
+                          '开启后，命中允许分组的请求在订阅额度不足或不可用时会直接失败，不会继续扣用户钱包余额。',
+                        )}
+                      />
                     </Col>
 
                     <Col span={12}>

@@ -156,9 +156,10 @@ type SubscriptionPlan struct {
 	DurationValue int    `json:"duration_value" gorm:"type:int;not null;default:1"`
 	CustomSeconds int64  `json:"custom_seconds" gorm:"type:bigint;not null;default:0"`
 
-	Enabled            bool   `json:"enabled" gorm:"default:true"`
-	SortOrder          int    `json:"sort_order" gorm:"type:int;default:0"`
-	AllowedTokenGroups string `json:"allowed_token_groups" gorm:"type:text"`
+	Enabled               bool   `json:"enabled" gorm:"default:true"`
+	SortOrder             int    `json:"sort_order" gorm:"type:int;default:0"`
+	AllowedTokenGroups    string `json:"allowed_token_groups" gorm:"type:text"`
+	DisableWalletFallback bool   `json:"disable_wallet_fallback" gorm:"default:false"`
 
 	StripePriceId  string `json:"stripe_price_id" gorm:"type:varchar(128);default:''"`
 	CreemProductId string `json:"creem_product_id" gorm:"type:varchar(128);default:''"`
@@ -422,6 +423,34 @@ func isSubscriptionPlanGroupAllowed(plan *SubscriptionPlan, usingGroup string) b
 		}
 	}
 	return false
+}
+
+func HasWalletFallbackDisabledSubscription(userId int, usingGroup string) (bool, error) {
+	if userId <= 0 {
+		return false, errors.New("invalid userId")
+	}
+	now := GetDBTimestamp()
+	var subs []UserSubscription
+	if err := DB.Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
+		Order("end_time asc, id asc").
+		Find(&subs).Error; err != nil {
+		return false, err
+	}
+	for _, sub := range subs {
+		plan, err := GetSubscriptionPlanById(sub.PlanId)
+		if err != nil {
+			return false, err
+		}
+		if !plan.DisableWalletFallback {
+			continue
+		}
+		groups := parseAllowedTokenGroups(plan.AllowedTokenGroups)
+		if len(groups) == 0 || !isSubscriptionPlanGroupAllowed(plan, usingGroup) {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 func calcNextResetTime(base time.Time, plan *SubscriptionPlan, endUnix int64) int64 {
