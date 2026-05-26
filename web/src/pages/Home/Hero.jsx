@@ -32,6 +32,16 @@ const Hero = () => {
     typeof window !== 'undefined'
       ? window.location.origin
       : 'https://api.example.com';
+  const curlExample = `curl ${baseUrl}/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer sk-your-token" \\
+  -d '{
+    "model": "gpt-5.5",
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user", "content": "Hello!"}
+    ]
+  }'`;
   const highlights = [
     { label: 'OpenAI SDK 兼容', desc: '现有客户端只需替换 base_url' },
     {
@@ -41,6 +51,8 @@ const Hero = () => {
     { label: '按量透明计费', desc: '统一账单，模型倍率实时可查' },
     { label: '调用日志可追踪', desc: '请求、扣费和错误链路清晰可见' },
   ];
+
+  const trustBadges = ['¥1 起充', '按量扣费', '支持订阅套餐', '调用日志可查'];
 
   return (
     <section
@@ -103,7 +115,7 @@ const Hero = () => {
             ...theme.typography.h1,
             maxWidth: 900,
             marginBottom: 24,
-            letterSpacing: '-0.02em',
+            letterSpacing: 0,
             lineHeight: 1.2,
           }}
         >
@@ -122,9 +134,37 @@ const Hero = () => {
             fontSize: 20,
           }}
         >
-          兼容 OpenAI 调用方式，统一管理 OpenAI、Claude、Gemini、DeepSeek、Qwen
-          等模型。按量计费、统一账单、开箱即用。
+          兼容 OpenAI 调用方式，一个 API Key 接入 Claude、GPT、Gemini、DeepSeek、Qwen
+          等模型。支持小额充值、按量扣费和调用日志追踪，适合 AI 编程工具与业务原型快速接入。
         </p>
+
+        <div
+          style={{
+            display: 'flex',
+            gap: 10,
+            flexWrap: 'wrap',
+            justifyContent: 'center',
+            marginTop: -24,
+            marginBottom: 40,
+          }}
+        >
+          {trustBadges.map((item) => (
+            <span
+              key={item}
+              style={{
+                ...theme.typography.small,
+                color: theme.colors.text.body,
+                background: theme.colors.background.secondary,
+                border: `1px solid ${theme.colors.border.default}`,
+                borderRadius: 100,
+                padding: '6px 12px',
+                fontWeight: 700,
+              }}
+            >
+              {item}
+            </span>
+          ))}
+        </div>
 
         {/* CTAs */}
         <div
@@ -133,7 +173,7 @@ const Hero = () => {
             gap: 16,
             flexWrap: 'wrap',
             justifyContent: 'center',
-            marginBottom: 64,
+            marginBottom: 32,
           }}
         >
           <Button
@@ -149,14 +189,14 @@ const Hero = () => {
               boxShadow: '0 8px 20px -6px rgba(79, 70, 229, 0.4)',
             }}
           >
-            免费获取 API Key
+            免费注册，领取 API Key
           </Button>
           <Button
             theme='light'
             size='large'
             onClick={() =>
               document
-                .getElementById('quick-start')
+                .getElementById('first-recharge')
                 ?.scrollIntoView({ behavior: 'smooth' })
             }
             style={{
@@ -170,36 +210,28 @@ const Hero = () => {
               boxShadow: theme.shadows.sm,
             }}
           >
-            查看接入示例
+            查看充值套餐
           </Button>
         </div>
-
-        {/* Command Line Hint */}
-        <div
+        <button
+          type='button'
+          onClick={() =>
+            document
+              .getElementById('client-guides')
+              ?.scrollIntoView({ behavior: 'smooth' })
+          }
           style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 12,
-            padding: '12px 24px',
-            background: theme.colors.background.secondary,
-            borderRadius: theme.radius.lg,
-            border: `1px solid ${theme.colors.border.default}`,
-            maxWidth: '100%',
-            overflowX: 'auto',
+            marginTop: 0,
+            border: 'none',
+            background: 'transparent',
+            color: theme.colors.primary.main,
+            fontWeight: 700,
+            cursor: 'pointer',
+            padding: '8px 10px',
           }}
         >
-          <span
-            style={{
-              ...theme.typography.small,
-              color: theme.colors.text.muted,
-              fontFamily: 'monospace',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            $ curl {baseUrl}/v1/chat/completions
-          </span>
-          <CopyButton text={`curl ${baseUrl}/v1/chat/completions`} />
-        </div>
+          查看 Claude Code / Codex CLI 插件接入示例
+        </button>
 
         <div
           style={{

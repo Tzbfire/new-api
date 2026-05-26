@@ -165,6 +165,8 @@ const Home = () => {
         <div className='w-full overflow-x-hidden'>
           {/* Hero: brand entry point */}
           <Hero />
+          {/* First recharge and billing options */}
+          <PricingAndTutorial />
           {/* Config generator for AI tools */}
           <div id='quick-start'>
             <ConfigGenerator />
@@ -173,8 +175,6 @@ const Home = () => {
           <div id='pricing-calculator'>
             <PricingCalculator />
           </div>
-          {/* Dynamic billing options */}
-          <PricingAndTutorial />
           <IntegrationGuide />
           {/* Live model distribution */}
           <ModelDistribution />

@@ -23,7 +23,7 @@ const ConfigGenerator = () => {
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer sk-your-token" \\
   -d '{
-    "model": "gpt-4o",
+    "model": "gpt-5.5",
     "messages": [
       {"role": "system", "content": "You are a helpful assistant."},
       {"role": "user", "content": "Hello!"}
@@ -38,7 +38,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gpt-4o",
+    model="gpt-5.5",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Hello!"}
@@ -59,7 +59,7 @@ async function main() {
       { role: "system", content: "You are a helpful assistant." },
       { role: "user", content: "Hello!" }
     ],
-    model: "gpt-4o",
+    model: "gpt-5.5",
   });
 
   console.log(completion.choices[0].message.content);
@@ -81,7 +81,7 @@ func main() {
     resp, err := client.CreateChatCompletion(
         context.Background(),
         openai.ChatCompletionRequest{
-            Model: "gpt-4o",
+            Model: "gpt-5.5",
             Messages: []openai.ChatCompletionMessage{
                 {Role: "system", Content: "You are a helpful assistant."},
                 {Role: "user", Content: "Hello!"},

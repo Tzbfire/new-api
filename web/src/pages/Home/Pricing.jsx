@@ -27,27 +27,36 @@ const formatDuration = (value, unit) => {
 
 const fallbackUsageCards = [
   {
-    title: '个人测试',
+    title: '首充体验',
     amount: '¥1 起充',
     topupAmount: 1,
-    desc: '适合快速验证模型能力和接入流程。',
-    features: ['按量扣费', 'OpenAI SDK 兼容', '调用日志可查'],
+    desc: '适合先跑通 API Key、模型路由和扣费日志。',
+    features: ['小额验证', 'OpenAI SDK 兼容', '请求与扣费可追踪'],
+    action: '首充体验',
   },
   {
-    title: '日常开发',
+    title: '开发者推荐',
     amount: '¥50 推荐',
     topupAmount: 50,
-    desc: '适合将网关接入 IDE、机器人或业务原型。',
-    features: ['统一模型入口', '分组倍率透明', '失败重试与路由'],
+    desc: '适合 Claude Code、Codex CLI、机器人和业务原型的日常调用。',
+    features: ['统一模型入口', '分组倍率透明', '适合持续开发调用'],
     featured: true,
+    action: '推荐充值 ¥50',
   },
   {
-    title: '团队生产',
+    title: '团队高频',
     amount: '¥1000+',
     topupAmount: 1000,
     desc: '适合多人协作、稳定生产调用和财务对账。',
     features: ['团队额度管理', '高频调用场景', '专属支持与发票'],
+    action: '开通团队额度',
   },
+];
+
+const valuePoints = [
+  '充值后立即可用：创建 Key 后可直接调用',
+  '按量扣费：不用订阅也能先小额测试',
+  '明细可查：每次请求、模型和扣费都有日志',
 ];
 
 const tabItems = [
@@ -108,6 +117,7 @@ const PricingAndTutorial = () => {
 
   return (
     <section
+      id='first-recharge'
       style={{
         padding: theme.layout.sectionPadding,
         background: theme.colors.background.secondary,
@@ -127,10 +137,10 @@ const PricingAndTutorial = () => {
               marginBottom: 16,
             }}
           >
-            真实后台价格
+            透明计费 · 充值即用
           </div>
           <h2 style={{ ...theme.typography.h2, margin: '0 0 16px' }}>
-            按量使用，也支持订阅套餐
+            新用户先小额验证，跑通后再升级套餐
           </h2>
           <p
             style={{
@@ -139,8 +149,34 @@ const PricingAndTutorial = () => {
               margin: '0 auto',
             }}
           >
-            新用户默认走额度充值，充值后按实际调用扣费；需要稳定周期权益时，可以选择后台配置的订阅套餐。
+            不确定用量时先充值体验；高频调用时选择每日额度套餐，成本更稳定。
           </p>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: 12,
+              marginTop: 28,
+            }}
+          >
+            {valuePoints.map((item) => (
+              <div
+                key={item}
+                style={{
+                  ...theme.typography.small,
+                  color: theme.colors.text.body,
+                  background: theme.colors.background.surface,
+                  border: `1px solid ${theme.colors.border.default}`,
+                  borderRadius: theme.radius.md,
+                  padding: '12px 14px',
+                  textAlign: 'left',
+                  fontWeight: 650,
+                }}
+              >
+                {item}
+              </div>
+            ))}
+          </div>
         </div>
 
         <div
@@ -314,7 +350,7 @@ const PricingAndTutorial = () => {
                       fontWeight: 600,
                     }}
                   >
-                    充值并开始使用
+                    {card.action || '充值并开始使用'}
                   </Button>
                 </div>
               ))}
