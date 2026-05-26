@@ -451,7 +451,12 @@ func runImageStudioTask(snapshot imageStudioContext) {
 	task.Status = model.TaskStatusInProgress
 	task.Progress = "10%"
 	task.StartTime = time.Now().Unix()
-	_ = task.Update()
+	if rows, err := task.UpdateExisting(); err != nil {
+		logger.LogError(context.Background(), fmt.Sprintf("image studio start task %s update failed: %s", task.TaskID, err.Error()))
+		return
+	} else if rows == 0 {
+		return
+	}
 
 	payload, usage, quota, relayErr := executeImageStudioRelay(c, recorder)
 	if relayErr != nil {
@@ -476,7 +481,7 @@ func runImageStudioTask(snapshot imageStudioContext) {
 		Response: payload,
 		Usage:    usage,
 	})
-	if updateErr := task.Update(); updateErr != nil {
+	if _, updateErr := task.UpdateExisting(); updateErr != nil {
 		logger.LogError(context.Background(), fmt.Sprintf("image studio update task %s failed: %s", task.TaskID, updateErr.Error()))
 	}
 }
@@ -568,7 +573,7 @@ func failImageStudioTask(task *model.Task, reason string) {
 	task.FailReason = reason
 	task.FinishTime = time.Now().Unix()
 	task.UpdatedAt = task.FinishTime
-	if err := task.Update(); err != nil {
+	if _, err := task.UpdateExisting(); err != nil {
 		logger.LogError(context.Background(), fmt.Sprintf("image studio fail task %s update failed: %s", task.TaskID, err.Error()))
 	}
 }

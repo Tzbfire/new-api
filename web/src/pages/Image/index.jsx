@@ -570,6 +570,26 @@ const ImageStudio = () => {
     });
   }, []);
 
+  const deleteImageTasks = useCallback(
+    async (taskIds) => {
+      const cleanTaskIds = Array.from(new Set((taskIds || []).filter(Boolean)));
+      if (cleanTaskIds.length === 0) return true;
+      try {
+        const res = await API.delete('/api/task/self/image-studio', {
+          data: { task_ids: cleanTaskIds },
+        });
+        if (res.data?.success === false) {
+          throw new Error(res.data?.message || t('删除失败'));
+        }
+        return true;
+      } catch (e) {
+        showError(e);
+        return false;
+      }
+    },
+    [t],
+  );
+
   const extractImages = useCallback((data) => {
     if (Array.isArray(data?.data)) return data.data;
     if (Array.isArray(data?.response?.data)) return data.response.data;
@@ -891,9 +911,17 @@ const ImageStudio = () => {
     showSuccess(t('已回填参数'));
   };
 
-  const removeOne = (id) => {
-    hideResultIds([id]);
-    setResults((prev) => prev.filter((x) => x.id !== id));
+  const removeOne = async (item) => {
+    const taskId = item?.taskId || item?.id;
+    if (!taskId) return;
+    const ok = await deleteImageTasks([taskId]);
+    if (!ok) {
+      hideResultIds([taskId, item?.id]);
+    }
+    setResults((prev) => prev.filter((x) => x.taskId !== taskId));
+    if (ok) {
+      await loadImageTasks(true);
+    }
   };
 
   // 把结果图作为参考图加入 i2i 上传列表
@@ -933,9 +961,18 @@ const ImageStudio = () => {
     }
   };
 
-  const clearAll = () => {
-    hideResultIds(results.map((item) => item.taskId || item.id));
+  const clearAll = async () => {
+    const taskIds = Array.from(
+      new Set(results.map((item) => item.taskId).filter(Boolean)),
+    );
+    const ok = await deleteImageTasks(taskIds);
+    if (!ok) {
+      hideResultIds(results.map((item) => item.taskId || item.id));
+    }
     setResults([]);
+    if (ok) {
+      await loadImageTasks(true);
+    }
   };
 
   // ZIP 打包下载
@@ -1565,7 +1602,7 @@ const ImageStudio = () => {
                           size='small'
                           type='tertiary'
                           icon={<IconClose />}
-                          onClick={() => removeOne(it.id)}
+                          onClick={() => removeOne(it)}
                         >
                           {t('移除')}
                         </Button>
@@ -1609,7 +1646,7 @@ const ImageStudio = () => {
                             <Button
                               size='small'
                               icon={<IconClose />}
-                              onClick={() => removeOne(it.id)}
+                              onClick={() => removeOne(it)}
                               className='!backdrop-blur !bg-white/70 dark:!bg-black/50'
                             />
                           </Tooltip>

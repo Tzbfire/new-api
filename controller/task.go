@@ -14,6 +14,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+type deleteImageStudioTasksRequest struct {
+	TaskIDs []string `json:"task_ids"`
+}
+
 // UpdateTaskBulk 薄入口，实际轮询逻辑在 service 层
 func UpdateTaskBulk() {
 	service.TaskPollingLoop()
@@ -38,7 +42,7 @@ func GetAllTask(c *gin.Context) {
 	items := model.TaskGetAllTasks(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.TaskCountAllTasks(queryParams)
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(tasksToDto(items, true))
+	pageInfo.SetItems(tasksToDto(c, items, true))
 	common.ApiSuccess(c, pageInfo)
 }
 
@@ -62,11 +66,33 @@ func GetUserTask(c *gin.Context) {
 	items := model.TaskGetAllUserTask(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.TaskCountAllUserTask(userId, queryParams)
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(tasksToDto(items, false))
+	pageInfo.SetItems(tasksToDto(c, items, false))
 	common.ApiSuccess(c, pageInfo)
 }
 
-func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
+func DeleteUserImageStudioTasks(c *gin.Context) {
+	var req deleteImageStudioTasksRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if len(req.TaskIDs) == 0 {
+		common.ApiErrorMsg(c, "task_ids 不能为空")
+		return
+	}
+
+	deleted, err := model.DeleteUserTasksByTaskIDs(c.GetInt("id"), constant.TaskPlatformImageStudio, req.TaskIDs)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	common.ApiSuccess(c, gin.H{
+		"deleted": deleted,
+	})
+}
+
+func tasksToDto(c *gin.Context, tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 	var userIdMap map[int]*model.UserBase
 	if fillUser {
 		userIdMap = make(map[int]*model.UserBase)
@@ -89,6 +115,7 @@ func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 			}
 		}
 		result[i] = relay.TaskModel2Dto(task)
+		sanitizeImageStudioTaskDto(c, task, result[i])
 	}
 	return result
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -401,6 +402,11 @@ func (Task *Task) Update() error {
 	return err
 }
 
+func (t *Task) UpdateExisting() (int64, error) {
+	result := DB.Model(&Task{}).Where("id = ?", t.ID).Select("*").Updates(t)
+	return result.RowsAffected, result.Error
+}
+
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).
 // Returns (true, nil) if this caller won the update, (false, nil) if
 // another process already moved the task out of fromStatus.
@@ -428,6 +434,32 @@ func TaskBulkUpdateByID(ids []int64, params map[string]any) error {
 	return DB.Model(&Task{}).
 		Where("id in (?)", ids).
 		Updates(params).Error
+}
+
+func DeleteUserTasksByTaskIDs(userID int, platform constant.TaskPlatform, taskIDs []string) (int64, error) {
+	if userID <= 0 || len(taskIDs) == 0 {
+		return 0, nil
+	}
+	cleanTaskIDs := make([]string, 0, len(taskIDs))
+	seen := make(map[string]bool, len(taskIDs))
+	for _, taskID := range taskIDs {
+		taskID = strings.TrimSpace(taskID)
+		if taskID == "" || seen[taskID] {
+			continue
+		}
+		seen[taskID] = true
+		cleanTaskIDs = append(cleanTaskIDs, taskID)
+	}
+	if len(cleanTaskIDs) == 0 {
+		return 0, nil
+	}
+
+	query := DB.Where("user_id = ? and task_id in ?", userID, cleanTaskIDs)
+	if platform != "" {
+		query = query.Where("platform = ?", platform)
+	}
+	result := query.Delete(&Task{})
+	return result.RowsAffected, result.Error
 }
 
 type TaskQuotaUsage struct {

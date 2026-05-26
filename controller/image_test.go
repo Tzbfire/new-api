@@ -2,15 +2,24 @@ package controller
 
 import (
 	"bytes"
+	"encoding/base64"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 )
 
 func TestBuildImageStudioJSONBodiesSplitsNToSingleImageRequests(t *testing.T) {
@@ -134,5 +143,241 @@ func TestBuildImageStudioMultipartBodiesSplitsNAndKeepsFiles(t *testing.T) {
 		if out.String() != "image-bytes" {
 			t.Fatalf("file content changed: %q", out.String())
 		}
+	}
+}
+
+func TestSanitizeImageStudioTaskDtoReplacesBase64WithStableURL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "https://example.test/api/task/self", nil)
+
+	task := &model.Task{
+		TaskID:   "task_img",
+		UserId:   123,
+		Platform: constant.TaskPlatformImageStudio,
+	}
+	task.SetData(imageStudioTaskPayload{
+		Response: map[string]any{
+			"data": []any{
+				map[string]any{"b64_json": base64.StdEncoding.EncodeToString([]byte("image-one"))},
+				map[string]any{"b64_json": base64.StdEncoding.EncodeToString([]byte("image-two"))},
+			},
+		},
+	})
+	taskDto := relayTaskDto(task)
+
+	sanitizeImageStudioTaskDto(c, task, taskDto)
+
+	var payload map[string]any
+	if err := common.Unmarshal(taskDto.Data, &payload); err != nil {
+		t.Fatalf("unmarshal sanitized data failed: %v", err)
+	}
+	images := payload["response"].(map[string]any)["data"].([]any)
+	first := images[0].(map[string]any)
+	second := images[1].(map[string]any)
+	if _, ok := first["b64_json"]; ok {
+		t.Fatal("expected first image b64_json to be removed")
+	}
+	if _, ok := second["b64_json"]; ok {
+		t.Fatal("expected second image b64_json to be removed")
+	}
+	if got := first["url"].(string); !strings.Contains(got, "/api/task/image-studio/task_img/images/1/content") {
+		t.Fatalf("unexpected first image url: %s", got)
+	}
+	if got := second["url"].(string); !strings.Contains(got, "/api/task/image-studio/task_img/images/2/content") {
+		t.Fatalf("unexpected second image url: %s", got)
+	}
+	if first["url"] == second["url"] {
+		t.Fatal("expected per-image URLs to be distinct")
+	}
+}
+
+func TestFindImageStudioImageKeepsStoredBase64Available(t *testing.T) {
+	task := &model.Task{}
+	raw := base64.StdEncoding.EncodeToString([]byte("image"))
+	task.SetData(imageStudioTaskPayload{
+		Response: map[string]any{
+			"data": []any{
+				map[string]any{"b64_json": raw},
+			},
+		},
+	})
+
+	image, found := findImageStudioImage(task.Data, 1)
+	if !found {
+		t.Fatal("expected image to be found")
+	}
+	if got := image["b64_json"]; got != raw {
+		t.Fatalf("expected stored base64 to remain available, got %#v", got)
+	}
+}
+
+func TestVerifyImageStudioTaskImageURLRejectsExpiredSignature(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	expires := time.Now().Add(-time.Minute).Unix()
+	query := url.Values{}
+	query.Set("user_id", "123")
+	query.Set("expires", strconv.FormatInt(expires, 10))
+	query.Set("signature", imageStudioTaskImageSignature(123, "task_img", 1, expires))
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/content?"+query.Encode(), nil)
+
+	if _, ok := verifyImageStudioTaskImageURL(c, "task_img", 1); ok {
+		t.Fatal("expected expired signed URL to be rejected")
+	}
+}
+
+func TestGetImageStudioTaskImageReturnsStoredBase64Content(t *testing.T) {
+	db := setupImageStudioControllerTestDB(t)
+	raw := base64.StdEncoding.EncodeToString([]byte("image-content"))
+	task := &model.Task{
+		TaskID:   "task_content",
+		UserId:   123,
+		Platform: constant.TaskPlatformImageStudio,
+		Status:   model.TaskStatusSuccess,
+	}
+	task.SetData(imageStudioTaskPayload{
+		Response: map[string]any{
+			"data": []any{
+				map[string]any{
+					"b64_json":  raw,
+					"mime_type": "image/png",
+				},
+			},
+		},
+	})
+	if err := db.Create(task).Error; err != nil {
+		t.Fatalf("failed to create task: %v", err)
+	}
+
+	expires := time.Now().Add(time.Hour).Unix()
+	query := url.Values{}
+	query.Set("user_id", "123")
+	query.Set("expires", strconv.FormatInt(expires, 10))
+	query.Set("signature", imageStudioTaskImageSignature(123, "task_content", 1, expires))
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/content?"+query.Encode(), nil)
+	c.Params = gin.Params{
+		{Key: "task_id", Value: "task_content"},
+		{Key: "index", Value: "1"},
+	}
+
+	GetImageStudioTaskImage(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("expected image/png, got %q", got)
+	}
+	if got := recorder.Body.String(); got != "image-content" {
+		t.Fatalf("unexpected image content: %q", got)
+	}
+}
+
+func TestDeleteUserImageStudioTasksDeletesOnlyOwnedImageStudioTasks(t *testing.T) {
+	db := setupImageStudioControllerTestDB(t)
+	tasks := []*model.Task{
+		{TaskID: "task_owned", UserId: 123, Platform: constant.TaskPlatformImageStudio},
+		{TaskID: "task_other_user", UserId: 456, Platform: constant.TaskPlatformImageStudio},
+		{TaskID: "task_other_platform", UserId: 123, Platform: constant.TaskPlatformSuno},
+	}
+	for _, task := range tasks {
+		if err := db.Create(task).Error; err != nil {
+			t.Fatalf("failed to create task %s: %v", task.TaskID, err)
+		}
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	body := bytes.NewReader([]byte(`{"task_ids":["task_owned","task_other_user","task_other_platform"]}`))
+	c.Request = httptest.NewRequest(http.MethodDelete, "/api/task/self/image-studio", body)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("id", 123)
+
+	DeleteUserImageStudioTasks(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if _, exists, err := model.GetByOnlyTaskId("task_owned"); err != nil || exists {
+		t.Fatalf("expected owned image studio task to be deleted, exists=%v err=%v", exists, err)
+	}
+	if _, exists, err := model.GetByOnlyTaskId("task_other_user"); err != nil || !exists {
+		t.Fatalf("expected other user task to remain, exists=%v err=%v", exists, err)
+	}
+	if _, exists, err := model.GetByOnlyTaskId("task_other_platform"); err != nil || !exists {
+		t.Fatalf("expected other platform task to remain, exists=%v err=%v", exists, err)
+	}
+}
+
+func TestUpdateExistingDoesNotReinsertDeletedTask(t *testing.T) {
+	db := setupImageStudioControllerTestDB(t)
+	task := &model.Task{
+		TaskID:   "task_deleted",
+		UserId:   123,
+		Platform: constant.TaskPlatformImageStudio,
+		Status:   model.TaskStatusQueued,
+	}
+	if err := db.Create(task).Error; err != nil {
+		t.Fatalf("failed to create task: %v", err)
+	}
+	if err := db.Delete(task).Error; err != nil {
+		t.Fatalf("failed to delete task: %v", err)
+	}
+
+	task.Status = model.TaskStatusSuccess
+	rows, err := task.UpdateExisting()
+	if err != nil {
+		t.Fatalf("update existing failed: %v", err)
+	}
+	if rows != 0 {
+		t.Fatalf("expected zero updated rows, got %d", rows)
+	}
+	if _, exists, err := model.GetByOnlyTaskId("task_deleted"); err != nil || exists {
+		t.Fatalf("expected task to remain deleted, exists=%v err=%v", exists, err)
+	}
+}
+
+func setupImageStudioControllerTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+
+	gin.SetMode(gin.TestMode)
+	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
+	common.RedisEnabled = false
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("failed to open sqlite db: %v", err)
+	}
+	model.DB = db
+	model.LOG_DB = db
+
+	if err := db.AutoMigrate(&model.Task{}); err != nil {
+		t.Fatalf("failed to migrate task table: %v", err)
+	}
+
+	t.Cleanup(func() {
+		sqlDB, err := db.DB()
+		if err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	return db
+}
+
+func relayTaskDto(task *model.Task) *dto.TaskDto {
+	return &dto.TaskDto{
+		TaskID:   task.TaskID,
+		Platform: string(task.Platform),
+		UserId:   task.UserId,
+		Data:     task.Data,
 	}
 }

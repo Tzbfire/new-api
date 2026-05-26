@@ -349,6 +349,8 @@ func SetApiRouter(router *gin.Engine) {
 		taskRoute := apiRouter.Group("/task")
 		{
 			taskRoute.GET("/self", middleware.UserAuth(), controller.GetUserTask)
+			taskRoute.DELETE("/self/image-studio", middleware.UserAuth(), controller.DeleteUserImageStudioTasks)
+			taskRoute.GET("/image-studio/:task_id/images/:index/content", controller.GetImageStudioTaskImage)
 			taskRoute.GET("/", middleware.AdminAuth(), controller.GetAllTask)
 		}
 
