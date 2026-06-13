@@ -41,6 +41,9 @@ func TestBuildImageStudioJSONBodiesSplitsNToSingleImageRequests(t *testing.T) {
 		if payload["n"] != float64(1) {
 			t.Fatalf("expected n=1, got %#v", payload["n"])
 		}
+		if payload["response_format"] != "url" {
+			t.Fatalf("expected response_format=url, got %#v", payload["response_format"])
+		}
 		if payload["prompt"] != "draw" {
 			t.Fatalf("prompt changed: %#v", payload["prompt"])
 		}
@@ -69,8 +72,30 @@ func TestBuildImageStudioFormBodiesSplitsNToSingleImageRequests(t *testing.T) {
 		if got := values.Get("n"); got != "1" {
 			t.Fatalf("expected n=1, got %q", got)
 		}
+		if got := values.Get("response_format"); got != "url" {
+			t.Fatalf("expected response_format=url, got %q", got)
+		}
 		if got := values.Get("prompt"); got != "draw" {
 			t.Fatalf("prompt changed: %q", got)
+		}
+	}
+}
+
+func TestBuildImageStudioJSONBodiesForcesURLResponseFormat(t *testing.T) {
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw","n":2,"response_format":"b64_json"}`)
+
+	bodies, err := buildImageStudioTaskBodies(nil, "application/json", body, 2)
+	if err != nil {
+		t.Fatalf("build bodies failed: %v", err)
+	}
+
+	for _, item := range bodies {
+		var payload map[string]any
+		if err := common.Unmarshal(item.Body, &payload); err != nil {
+			t.Fatalf("unmarshal split body failed: %v", err)
+		}
+		if payload["response_format"] != "url" {
+			t.Fatalf("expected response_format to be forced to url, got %#v", payload["response_format"])
 		}
 	}
 }
@@ -209,6 +234,43 @@ func TestFindImageStudioImageKeepsStoredBase64Available(t *testing.T) {
 	}
 	if got := image["b64_json"]; got != raw {
 		t.Fatalf("expected stored base64 to remain available, got %#v", got)
+	}
+}
+
+func TestParseImageStudioResponseRemovesStoredBase64(t *testing.T) {
+	raw := base64.StdEncoding.EncodeToString([]byte("image"))
+	body := []byte(`{
+		"created": 123,
+		"data": [
+			{"url":"https://cdn.example.test/image.png","b64_json":"` + raw + `","revised_prompt":"draw"}
+		],
+		"metadata": {"nested": {"b64_json":"` + raw + `", "keep":"value"}},
+		"usage": {"total_tokens": 1}
+	}`)
+
+	payload, usage, err := parseImageStudioResponse(body)
+	if err != nil {
+		t.Fatalf("parse image response failed: %v", err)
+	}
+	if usage == nil || usage.TotalTokens != 1 {
+		t.Fatalf("unexpected usage: %#v", usage)
+	}
+
+	payloadMap := payload.(map[string]any)
+	image := payloadMap["data"].([]any)[0].(map[string]any)
+	if _, ok := image["b64_json"]; ok {
+		t.Fatal("expected image b64_json to be removed before storage")
+	}
+	if got := image["url"]; got != "https://cdn.example.test/image.png" {
+		t.Fatalf("expected image url to be preserved, got %#v", got)
+	}
+	metadata := payloadMap["metadata"].(map[string]any)
+	nested := metadata["nested"].(map[string]any)
+	if _, ok := nested["b64_json"]; ok {
+		t.Fatal("expected nested metadata b64_json to be removed before storage")
+	}
+	if got := nested["keep"]; got != "value" {
+		t.Fatalf("expected non-base64 metadata to be preserved, got %#v", got)
 	}
 }
 

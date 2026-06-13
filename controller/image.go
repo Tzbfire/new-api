@@ -254,6 +254,7 @@ func buildImageStudioJSONBodies(body []byte, contentType string, count int) ([]i
 		return nil, err
 	}
 	payload["n"] = 1
+	setImageStudioURLResponseFormat(payload)
 	nextBody, err := common.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -271,6 +272,7 @@ func buildImageStudioFormBodies(body []byte, contentType string, count int) ([]i
 		return nil, err
 	}
 	values.Set("n", "1")
+	values.Set("response_format", "url")
 	nextBody := []byte(values.Encode())
 	bodies := make([]imageStudioTaskBody, 0, count)
 	for i := 0; i < count; i++ {
@@ -301,7 +303,7 @@ func buildImageStudioMultipartBody(form *multipart.Form) ([]byte, string, error)
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 	for key, values := range form.Value {
-		if key == "n" {
+		if key == "n" || key == "response_format" {
 			continue
 		}
 		for _, value := range values {
@@ -312,6 +314,10 @@ func buildImageStudioMultipartBody(form *multipart.Form) ([]byte, string, error)
 		}
 	}
 	if err := writer.WriteField("n", "1"); err != nil {
+		_ = writer.Close()
+		return nil, "", err
+	}
+	if err := writer.WriteField("response_format", "url"); err != nil {
 		_ = writer.Close()
 		return nil, "", err
 	}
@@ -327,6 +333,10 @@ func buildImageStudioMultipartBody(form *multipart.Form) ([]byte, string, error)
 		return nil, "", err
 	}
 	return buf.Bytes(), writer.FormDataContentType(), nil
+}
+
+func setImageStudioURLResponseFormat(payload map[string]any) {
+	payload["response_format"] = "url"
 }
 
 func copyImageStudioMultipartFile(writer *multipart.Writer, field string, fileHeader *multipart.FileHeader) error {
@@ -601,7 +611,35 @@ func parseImageStudioResponse(data []byte) (any, *dto.Usage, error) {
 	if err := common.Unmarshal(data, &payload); err != nil {
 		return nil, nil, err
 	}
+	removeImageStudioStoredBase64(payload)
 	return payload, envelope.Usage, nil
+}
+
+func removeImageStudioStoredBase64(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		changed := false
+		if _, ok := typed["b64_json"]; ok {
+			delete(typed, "b64_json")
+			changed = true
+		}
+		for _, child := range typed {
+			if removeImageStudioStoredBase64(child) {
+				changed = true
+			}
+		}
+		return changed
+	case []any:
+		changed := false
+		for _, child := range typed {
+			if removeImageStudioStoredBase64(child) {
+				changed = true
+			}
+		}
+		return changed
+	default:
+		return false
+	}
 }
 
 func failImageStudioTask(task *model.Task, reason string) bool {
