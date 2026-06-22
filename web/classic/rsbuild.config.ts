@@ -47,6 +47,12 @@ export default defineConfig(({ envMode }) => {
           semiUiDir,
           'dist/css/semi.css',
         ),
+        // Semi UI still depends on date-fns-tz@1.x, which imports date-fns v2
+        // private subpaths. The workspace also installs date-fns v4 for the
+        // default frontend, so a clean Bun install can resolve date-fns-tz
+        // against v4 and fail on package "exports" during the classic build.
+        // Force classic's Semi UI stack to use Semi UI's nested date-fns v2.
+        'date-fns': path.resolve(semiUiDir, 'node_modules/date-fns'),
       },
     },
     html: {
