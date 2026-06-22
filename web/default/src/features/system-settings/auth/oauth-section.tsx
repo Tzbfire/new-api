@@ -77,6 +77,11 @@ const oauthSchema = z.object({
   LinuxDOClientId: z.string(),
   LinuxDOClientSecret: z.string(),
   LinuxDOMinimumTrustLevel: z.string(),
+  YaohuoOAuthEnabled: z.boolean(),
+  YaohuoClientId: z.string(),
+  YaohuoClientSecret: z.string(),
+  QuotaForYaohuoRegister: z.coerce.number().min(0),
+  QuotaForYaohuoBind: z.coerce.number().min(0),
   WeChatAuthEnabled: z.boolean(),
   WeChatServerAddress: z.string(),
   WeChatServerToken: z.string(),
@@ -106,6 +111,11 @@ type FlatOAuthDefaults = {
   LinuxDOClientId: string
   LinuxDOClientSecret: string
   LinuxDOMinimumTrustLevel: string
+  YaohuoOAuthEnabled: boolean
+  YaohuoClientId: string
+  YaohuoClientSecret: string
+  QuotaForYaohuoRegister: number
+  QuotaForYaohuoBind: number
   WeChatAuthEnabled: boolean
   WeChatServerAddress: string
   WeChatServerToken: string
@@ -140,6 +150,11 @@ const buildFormDefaults = (defaults: FlatOAuthDefaults): OAuthFormValues => ({
   LinuxDOClientId: defaults.LinuxDOClientId ?? '',
   LinuxDOClientSecret: defaults.LinuxDOClientSecret ?? '',
   LinuxDOMinimumTrustLevel: defaults.LinuxDOMinimumTrustLevel ?? '',
+  YaohuoOAuthEnabled: defaults.YaohuoOAuthEnabled,
+  YaohuoClientId: defaults.YaohuoClientId ?? '',
+  YaohuoClientSecret: defaults.YaohuoClientSecret ?? '',
+  QuotaForYaohuoRegister: defaults.QuotaForYaohuoRegister ?? 0,
+  QuotaForYaohuoBind: defaults.QuotaForYaohuoBind ?? 0,
   WeChatAuthEnabled: defaults.WeChatAuthEnabled,
   WeChatServerAddress: defaults.WeChatServerAddress ?? '',
   WeChatServerToken: defaults.WeChatServerToken ?? '',
@@ -167,6 +182,11 @@ const normalizeFormValues = (values: OAuthFormValues): FlatOAuthDefaults => ({
   LinuxDOClientId: values.LinuxDOClientId,
   LinuxDOClientSecret: values.LinuxDOClientSecret,
   LinuxDOMinimumTrustLevel: values.LinuxDOMinimumTrustLevel,
+  YaohuoOAuthEnabled: values.YaohuoOAuthEnabled,
+  YaohuoClientId: values.YaohuoClientId,
+  YaohuoClientSecret: values.YaohuoClientSecret,
+  QuotaForYaohuoRegister: values.QuotaForYaohuoRegister,
+  QuotaForYaohuoBind: values.QuotaForYaohuoBind,
   WeChatAuthEnabled: values.WeChatAuthEnabled,
   WeChatServerAddress: values.WeChatServerAddress,
   WeChatServerToken: values.WeChatServerToken,
@@ -294,12 +314,13 @@ export function OAuthSection(props: OAuthSectionProps) {
             <FormDirtyIndicator isDirty={form.formState.isDirty} />
 
             <Tabs value={activeTab} onValueChange={setActiveTab}>
-              <TabsList className='grid w-full grid-cols-6'>
+              <TabsList className='grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-7'>
                 <TabsTrigger value='github'>{t('GitHub')}</TabsTrigger>
                 <TabsTrigger value='discord'>{t('Discord')}</TabsTrigger>
                 <TabsTrigger value='oidc'>{t('OIDC')}</TabsTrigger>
                 <TabsTrigger value='telegram'>{t('Telegram')}</TabsTrigger>
                 <TabsTrigger value='linuxdo'>{t('LinuxDO')}</TabsTrigger>
+                <TabsTrigger value='yaohuo'>{t('Yaohuo')}</TabsTrigger>
                 <TabsTrigger value='wechat'>{t('WeChat')}</TabsTrigger>
               </TabsList>
 
@@ -792,6 +813,141 @@ export function OAuthSection(props: OAuthSectionProps) {
                       <FormDescription>
                         {t('Minimum LinuxDO trust level required')}
                       </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </TabsContent>
+
+              <TabsContent value='yaohuo' className={oauthTabContentClassName}>
+                <FormField
+                  control={form.control}
+                  name='YaohuoOAuthEnabled'
+                  render={({ field }) => (
+                    <SettingsSwitchItem>
+                      <SettingsSwitchContent>
+                        <FormLabel>{t('Enable Yaohuo OAuth')}</FormLabel>
+                        <FormDescription>
+                          {t('Allow users to sign in with Yaohuo')}
+                        </FormDescription>
+                      </SettingsSwitchContent>
+                      <FormControl>
+                        <Switch
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                    </SettingsSwitchItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='YaohuoClientId'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Yaohuo Client ID')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder={t('Your Yaohuo OAuth Client ID')}
+                          autoComplete='off'
+                          value={field.value ?? ''}
+                          onChange={(event) =>
+                            field.onChange(event.target.value)
+                          }
+                          name={field.name}
+                          onBlur={field.onBlur}
+                          ref={field.ref}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t('Callback URL')}: /oauth/yaohuo
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='YaohuoClientSecret'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Yaohuo Client Secret')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='password'
+                          placeholder={t('Your Yaohuo OAuth Client Secret')}
+                          autoComplete='new-password'
+                          value={field.value ?? ''}
+                          onChange={(event) =>
+                            field.onChange(event.target.value)
+                          }
+                          name={field.name}
+                          onBlur={field.onBlur}
+                          ref={field.ref}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='QuotaForYaohuoRegister'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Yaohuo register reward quota')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={0}
+                          placeholder='0'
+                          autoComplete='off'
+                          value={field.value ?? 0}
+                          onChange={(event) =>
+                            field.onChange(
+                              event.target.value === ''
+                                ? 0
+                                : event.currentTarget.valueAsNumber
+                            )
+                          }
+                          name={field.name}
+                          onBlur={field.onBlur}
+                          ref={field.ref}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='QuotaForYaohuoBind'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Yaohuo binding reward quota')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={0}
+                          placeholder='0'
+                          autoComplete='off'
+                          value={field.value ?? 0}
+                          onChange={(event) =>
+                            field.onChange(
+                              event.target.value === ''
+                                ? 0
+                                : event.currentTarget.valueAsNumber
+                            )
+                          }
+                          name={field.name}
+                          onBlur={field.onBlur}
+                          ref={field.ref}
+                        />
+                      </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}

@@ -1898,7 +1898,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
     "For private deployments, format: https://fastgpt.run/api/openapi": "For private deployments, format: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Force a syntactically valid JSON response",
@@ -4866,6 +4866,18 @@
     "Processing": "Processing",
     "No images yet": "No images yet",
     "Start with a prompt on the left. Your generated images will appear here.": "Start with a prompt on the left. Your generated images will appear here.",
-    "Image preview": "Image preview"
+    "Image preview": "Image preview",
+    "Allow users to sign in with Yaohuo": "Allow users to sign in with Yaohuo",
+    "Callback URL": "Callback URL",
+    "Continue with Yaohuo": "Continue with Yaohuo",
+    "Enable Yaohuo OAuth": "Enable Yaohuo OAuth",
+    "Failed to start Yaohuo login": "Failed to start Yaohuo login",
+    "Yaohuo": "Yaohuo",
+    "Yaohuo Client ID": "Yaohuo Client ID",
+    "Yaohuo Client Secret": "Yaohuo Client Secret",
+    "Yaohuo binding reward quota": "Yaohuo binding reward quota",
+    "Yaohuo register reward quota": "Yaohuo register reward quota",
+    "Your Yaohuo OAuth Client ID": "Your Yaohuo OAuth Client ID",
+    "Your Yaohuo OAuth Client Secret": "Your Yaohuo OAuth Client Secret"
   }
 }

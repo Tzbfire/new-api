@@ -69,6 +69,20 @@ export function buildLinuxDOOAuthUrl(clientId: string, state: string): string {
   return `https://connect.linux.do/oauth2/authorize?response_type=code&client_id=${clientId}&state=${state}`
 }
 
+/**
+ * Build Yaohuo OAuth URL
+ */
+export function buildYaohuoOAuthUrl(clientId: string, state: string): string {
+  const redirectUri = `${window.location.origin}/oauth/yaohuo`
+  const url = new URL('https://yaohuo.me/OAuth/Authorize.aspx')
+  url.searchParams.set('response_type', 'code')
+  url.searchParams.set('client_id', clientId)
+  url.searchParams.set('redirect_uri', redirectUri)
+  url.searchParams.set('scope', 'profile')
+  url.searchParams.set('state', state)
+  return url.toString()
+}
+
 // ============================================================================
 // OAuth Helper Functions
 // ============================================================================
@@ -77,13 +91,28 @@ export function buildLinuxDOOAuthUrl(clientId: string, state: string): string {
  * Get OAuth state token
  * Includes affiliate code from localStorage if available
  */
-export async function getOAuthState(): Promise<string | null> {
+type OAuthStateOptions = {
+  provider?: string
+  redirectUri?: string
+}
+
+export async function getOAuthState(
+  options: OAuthStateOptions = {}
+): Promise<string | null> {
   try {
     let path = '/api/oauth/state'
+    const params = new URLSearchParams()
     const affCode = localStorage.getItem('aff')
     if (affCode && affCode.length > 0) {
-      path += `?aff=${affCode}`
+      params.set('aff', affCode)
     }
+    if (options.provider && options.redirectUri) {
+      params.set('provider', options.provider)
+      params.set('redirect_uri', options.redirectUri)
+    }
+    const query = params.toString()
+    if (query) path += `?${query}`
+
     const res = await api.get(path)
     if (res.data.success) {
       return res.data.data
@@ -140,5 +169,20 @@ export async function handleLinuxDOOAuth(clientId: string): Promise<void> {
   if (!state) return
 
   const url = buildLinuxDOOAuthUrl(clientId, state)
+  window.open(url, '_blank')
+}
+
+/**
+ * Handle Yaohuo OAuth binding/login
+ */
+export async function handleYaohuoOAuth(clientId: string): Promise<void> {
+  const redirectUri = `${window.location.origin}/oauth/yaohuo`
+  const state = await getOAuthState({
+    provider: 'yaohuo',
+    redirectUri,
+  })
+  if (!state) return
+
+  const url = buildYaohuoOAuthUrl(clientId, state)
   window.open(url, '_blank')
 }

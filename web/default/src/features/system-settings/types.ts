@@ -143,6 +143,11 @@ export type AuthSettings = {
   LinuxDOClientId: string
   LinuxDOClientSecret: string
   LinuxDOMinimumTrustLevel: string
+  YaohuoOAuthEnabled: boolean
+  YaohuoClientId: string
+  YaohuoClientSecret: string
+  QuotaForYaohuoRegister: number
+  QuotaForYaohuoBind: number
   WeChatAuthEnabled: boolean
   WeChatServerAddress: string
   WeChatServerToken: string

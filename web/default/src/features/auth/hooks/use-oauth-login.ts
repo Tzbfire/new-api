@@ -28,6 +28,7 @@ import {
   buildDiscordOAuthUrl,
   buildOIDCOAuthUrl,
   buildLinuxDOOAuthUrl,
+  buildYaohuoOAuthUrl,
 } from '../lib/oauth'
 import type { SystemStatus, CustomOAuthProviderInfo } from '../types'
 
@@ -185,6 +186,31 @@ export function useOAuthLogin(status: SystemStatus | null) {
     }
   }
 
+  const handleYaohuoLogin = async () => {
+    if (!status?.yaohuo_client_id) return
+
+    setIsLoading(true)
+    try {
+      await resetSession()
+      const redirectUri = `${window.location.origin}/oauth/yaohuo`
+      const state = await getOAuthState({
+        provider: 'yaohuo',
+        redirectUri,
+      })
+      if (!state) {
+        toast.error(t('Failed to initialize OAuth'))
+        return
+      }
+
+      const url = buildYaohuoOAuthUrl(status.yaohuo_client_id, state)
+      window.open(url, '_self')
+    } catch (_error) {
+      toast.error(t('Failed to start Yaohuo login'))
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   const handleTelegramLogin = () => {
     toast.info(t('Telegram login requires widget integration; coming soon'))
   }
@@ -229,6 +255,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
     handleDiscordLogin,
     handleOIDCLogin,
     handleLinuxDOLogin,
+    handleYaohuoLogin,
     handleTelegramLogin,
     handleCustomOAuthLogin,
   }

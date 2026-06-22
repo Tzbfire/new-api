@@ -23,6 +23,7 @@ import {
   IconGithub,
   IconLinuxDo,
   IconWeChat,
+  IconYaohuo,
 } from '@/assets/brand-icons'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -61,6 +62,7 @@ export function OAuthProviders({
     handleDiscordLogin,
     handleOIDCLogin,
     handleLinuxDOLogin,
+    handleYaohuoLogin,
     handleTelegramLogin,
     handleCustomOAuthLogin,
   } = useOAuthLogin(status)
@@ -110,6 +112,15 @@ export function OAuthProviders({
       label: t('Continue with LinuxDO'),
       onClick: handleLinuxDOLogin,
       icon: <IconLinuxDo className='h-4 w-4' />,
+    })
+  }
+
+  if (status?.yaohuo_oauth) {
+    providerButtons.push({
+      key: 'yaohuo',
+      label: t('Continue with Yaohuo'),
+      onClick: handleYaohuoLogin,
+      icon: <IconYaohuo className='h-4 w-4' />,
     })
   }
 

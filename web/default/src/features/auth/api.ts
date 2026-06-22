@@ -85,10 +85,19 @@ export async function githubOAuthStart(clientId: string, state: string) {
 }
 
 // Get OAuth state for CSRF protection
-export async function getOAuthState(): Promise<string> {
+export async function getOAuthState(options?: {
+  provider?: string
+  redirectUri?: string
+}): Promise<string> {
   const aff =
     typeof window !== 'undefined' ? (localStorage.getItem('aff') ?? '') : ''
-  const res = await api.get('/api/oauth/state', { params: { aff } })
+  const params: Record<string, string> = {}
+  if (aff) params.aff = aff
+  if (options?.provider && options?.redirectUri) {
+    params.provider = options.provider
+    params.redirect_uri = options.redirectUri
+  }
+  const res = await api.get('/api/oauth/state', { params })
   if (res.data?.success) return res.data.data
   return ''
 }

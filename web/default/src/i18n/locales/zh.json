@@ -1898,7 +1898,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",
     "For private deployments, format: https://fastgpt.run/api/openapi": "对于私有部署，格式为：https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "强制返回语法合法的 JSON",
@@ -4866,6 +4866,18 @@
     "Processing": "处理中",
     "No images yet": "暂无图片",
     "Start with a prompt on the left. Your generated images will appear here.": "从左侧提示词开始，生成的图片会显示在这里。",
-    "Image preview": "图片预览"
+    "Image preview": "图片预览",
+    "Allow users to sign in with Yaohuo": "允许用户通过妖火登录",
+    "Callback URL": "回调 URL",
+    "Continue with Yaohuo": "使用 妖火 继续",
+    "Enable Yaohuo OAuth": "启用妖火 OAuth",
+    "Failed to start Yaohuo login": "无法开始妖火登录",
+    "Yaohuo": "妖火",
+    "Yaohuo Client ID": "妖火 Client ID",
+    "Yaohuo Client Secret": "妖火 Client Secret",
+    "Yaohuo binding reward quota": "绑定妖火奖励额度",
+    "Yaohuo register reward quota": "通过妖火注册奖励额度",
+    "Your Yaohuo OAuth Client ID": "你的妖火 OAuth Client ID",
+    "Your Yaohuo OAuth Client Secret": "你的妖火 OAuth Client Secret"
   }
 }

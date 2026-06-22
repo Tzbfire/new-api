@@ -36,6 +36,19 @@ const STATUS_RELATED_KEYS = [
   'general_setting.quota_display_type',
   'general_setting.custom_currency_symbol',
   'general_setting.custom_currency_exchange_rate',
+  'GitHubOAuthEnabled',
+  'GitHubClientId',
+  'discord.enabled',
+  'discord.client_id',
+  'oidc.enabled',
+  'oidc.client_id',
+  'oidc.authorization_endpoint',
+  'TelegramOAuthEnabled',
+  'LinuxDOOAuthEnabled',
+  'LinuxDOClientId',
+  'YaohuoOAuthEnabled',
+  'YaohuoClientId',
+  'WeChatAuthEnabled',
 ]
 
 export function useUpdateOption() {

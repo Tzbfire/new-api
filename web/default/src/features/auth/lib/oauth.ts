@@ -23,6 +23,7 @@ export {
   buildDiscordOAuthUrl,
   buildOIDCOAuthUrl,
   buildLinuxDOOAuthUrl,
+  buildYaohuoOAuthUrl,
 } from '@/lib/oauth'
 
 // ============================================================================
@@ -76,6 +77,15 @@ export function getAvailableOAuthProviders(
     })
   }
 
+  if (status.yaohuo_oauth) {
+    providers.push({
+      name: 'Yaohuo',
+      type: 'yaohuo',
+      enabled: true,
+      clientId: status.yaohuo_client_id,
+    })
+  }
+
   if (status.telegram_oauth) {
     providers.push({
       name: 'Telegram',
@@ -97,6 +107,7 @@ export function hasOAuthProviders(status: SystemStatus | null): boolean {
     status.discord_oauth ||
     status.oidc_enabled ||
     status.linuxdo_oauth ||
+    status.yaohuo_oauth ||
     status.telegram_oauth ||
     status.wechat_login
   )

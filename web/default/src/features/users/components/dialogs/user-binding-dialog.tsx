@@ -31,6 +31,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { SiGithub, SiDiscord } from 'react-icons/si'
 import { toast } from 'sonner'
+import { IconYaohuo } from '@/assets/brand-icons'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -78,6 +79,7 @@ interface StatusInfo {
   wechat_login?: boolean
   telegram_oauth?: boolean
   linuxdo_oauth?: boolean
+  yaohuo_oauth?: boolean
   custom_oauth_providers?: Array<{
     id: string
     name: string
@@ -140,6 +142,13 @@ const BUILTIN_BINDINGS: ReadonlyArray<{
     label: 'LinuxDO',
     icon: <Globe className='h-4 w-4' />,
     statusKey: 'linuxdo_oauth',
+  },
+  {
+    key: 'yaohuo_id',
+    field: 'yaohuo_id',
+    label: 'Yaohuo',
+    icon: <IconYaohuo className='h-4 w-4' />,
+    statusKey: 'yaohuo_oauth',
   },
 ]
 

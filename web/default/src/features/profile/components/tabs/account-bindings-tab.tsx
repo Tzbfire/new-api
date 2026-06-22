@@ -21,12 +21,13 @@ import { Mail, Shield, Send, Link2, Unlink } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { SiGithub, SiWechat, SiLinux } from 'react-icons/si'
 import { toast } from 'sonner'
-import { IconDiscord } from '@/assets/brand-icons'
+import { IconDiscord, IconYaohuo } from '@/assets/brand-icons'
 import {
   handleGitHubOAuth,
   handleOIDCOAuth,
   handleDiscordOAuth,
   handleLinuxDOOAuth,
+  handleYaohuoOAuth,
 } from '@/lib/oauth'
 import { useDialogs } from '@/hooks/use-dialog'
 import { useStatus } from '@/hooks/use-status'
@@ -252,6 +253,19 @@ export function AccountBindingsTab({
         onBind: () => {
           if (status?.linuxdo_client_id) {
             handleLinuxDOOAuth(status.linuxdo_client_id)
+          }
+        },
+      },
+      {
+        id: 'yaohuo',
+        label: t('Yaohuo'),
+        icon: IconYaohuo,
+        value: profile.yaohuo_id,
+        isBound: Boolean(profile.yaohuo_id),
+        isEnabled: status?.yaohuo_oauth || false,
+        onBind: () => {
+          if (status?.yaohuo_client_id) {
+            handleYaohuoOAuth(status.yaohuo_client_id)
           }
         },
       },

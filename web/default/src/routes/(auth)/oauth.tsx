@@ -28,7 +28,14 @@ function OAuthComponent() {
   const navigate = useNavigate()
   const search = useSearch({ from: '/(auth)/oauth' }) as {
     redirect?: string
-    provider?: 'github' | 'discord' | 'oidc' | 'linuxdo' | 'telegram' | 'wechat'
+    provider?:
+      | 'github'
+      | 'discord'
+      | 'oidc'
+      | 'linuxdo'
+      | 'yaohuo'
+      | 'telegram'
+      | 'wechat'
     code?: string
     state?: string
   }
