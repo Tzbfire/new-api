@@ -43,6 +43,12 @@ func InitBatchUpdater() {
 func addNewRecord(type_ int, id int, value int) {
 	batchUpdateLocks[type_].Lock()
 	defer batchUpdateLocks[type_].Unlock()
+	if type_ == BatchUpdateTypeLastRequestAt {
+		if current, ok := batchUpdateStores[type_][id]; !ok || value > current {
+			batchUpdateStores[type_][id] = value
+		}
+		return
+	}
 	if _, ok := batchUpdateStores[type_][id]; !ok {
 		batchUpdateStores[type_][id] = value
 	} else {
@@ -68,34 +74,57 @@ func batchUpdate() {
 	}
 
 	common.SysLog("batch update started")
+	stores := make([]map[int]int, BatchUpdateTypeCount)
 	for i := 0; i < BatchUpdateTypeCount; i++ {
 		batchUpdateLocks[i].Lock()
-		store := batchUpdateStores[i]
+		stores[i] = batchUpdateStores[i]
 		batchUpdateStores[i] = make(map[int]int)
 		batchUpdateLocks[i].Unlock()
-		// TODO: maybe we can combine updates with same key?
+	}
+
+	for i, store := range stores {
+		if i == BatchUpdateTypeUserQuota || i == BatchUpdateTypeUsedQuota || i == BatchUpdateTypeRequestCount || i == BatchUpdateTypeLastRequestAt {
+			continue
+		}
 		for key, value := range store {
 			switch i {
-			case BatchUpdateTypeUserQuota:
-				err := increaseUserQuota(key, value)
-				if err != nil {
-					common.SysLog("failed to batch update user quota: " + err.Error())
-				}
 			case BatchUpdateTypeTokenQuota:
 				err := increaseTokenQuota(key, value)
 				if err != nil {
 					common.SysLog("failed to batch update token quota: " + err.Error())
 				}
-			case BatchUpdateTypeUsedQuota:
-				updateUserUsedQuota(key, value)
-			case BatchUpdateTypeRequestCount:
-				updateUserRequestCount(key, value)
-			case BatchUpdateTypeLastRequestAt:
-				updateUserLastRequestAt(key, int64(value))
 			case BatchUpdateTypeChannelUsedQuota:
 				updateChannelUsedQuota(key, value)
 			}
 		}
+	}
+
+	userQuotaStore := stores[BatchUpdateTypeUserQuota]
+	usedQuotaStore := stores[BatchUpdateTypeUsedQuota]
+	requestCountStore := stores[BatchUpdateTypeRequestCount]
+	lastRequestAtStore := stores[BatchUpdateTypeLastRequestAt]
+
+	userIDs := make(map[int]struct{}, len(userQuotaStore)+len(usedQuotaStore)+len(requestCountStore)+len(lastRequestAtStore))
+	for key := range userQuotaStore {
+		userIDs[key] = struct{}{}
+	}
+	for key := range usedQuotaStore {
+		userIDs[key] = struct{}{}
+	}
+	for key := range requestCountStore {
+		userIDs[key] = struct{}{}
+	}
+	for key := range lastRequestAtStore {
+		userIDs[key] = struct{}{}
+	}
+	for key := range userIDs {
+		updateUserQuotaUsedQuotaRequestCountAndLastRequestAt(
+			key,
+			userQuotaStore[key],
+			usedQuotaStore[key],
+			requestCountStore[key],
+			int64(lastRequestAtStore[key]),
+		)
 	}
 	common.SysLog("batch update finished")
 }

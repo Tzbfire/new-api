@@ -582,7 +582,7 @@ func imageStudioQuotaFromLog(c *gin.Context) int {
 	if requestId == "" || userId == 0 {
 		return 0
 	}
-	logs, _, err := model.GetUserLogs(userId, model.LogTypeConsume, 0, 0, "", "", 0, 1, "", requestId)
+	logs, _, err := model.GetUserLogs(userId, model.LogTypeConsume, 0, 0, "", "", 0, 1, "", requestId, "")
 	if err != nil {
 		logger.LogError(c, fmt.Sprintf("image studio query consume log %s failed: %s", requestId, err.Error()))
 		return 0

@@ -15,9 +15,9 @@ type UserOAuthBindingReviewItem struct {
 // UserOAuthBinding stores the binding relationship between users and custom OAuth providers
 type UserOAuthBinding struct {
 	Id             int       `json:"id" gorm:"primaryKey"`
-	UserId         int       `json:"user_id" gorm:"not null;uniqueIndex:ux_user_provider"`                                        // User ID - one binding per user per provider
-	ProviderId     int       `json:"provider_id" gorm:"not null;uniqueIndex:ux_user_provider;uniqueIndex:ux_provider_userid"`     // Custom OAuth provider ID
-	ProviderUserId string    `json:"provider_user_id" gorm:"type:varchar(256);not null;uniqueIndex:ux_provider_userid"`           // User ID from OAuth provider - one OAuth account per provider
+	UserId         int       `json:"user_id" gorm:"not null;uniqueIndex:ux_user_provider"`                                    // User ID - one binding per user per provider
+	ProviderId     int       `json:"provider_id" gorm:"not null;uniqueIndex:ux_user_provider;uniqueIndex:ux_provider_userid"` // Custom OAuth provider ID
+	ProviderUserId string    `json:"provider_user_id" gorm:"type:varchar(256);not null;uniqueIndex:ux_provider_userid"`       // User ID from OAuth provider - one OAuth account per provider
 	CreatedAt      time.Time `json:"created_at"`
 }
 
@@ -139,9 +139,8 @@ func DeleteUserOAuthBinding(userId, providerId int) error {
 	return DB.Where("user_id = ? AND provider_id = ?", userId, providerId).Delete(&UserOAuthBinding{}).Error
 }
 
-// DeleteUserOAuthBindingsByUserId deletes all OAuth bindings for a user
-func DeleteUserOAuthBindingsByUserId(userId int) error {
-	return DB.Where("user_id = ?", userId).Delete(&UserOAuthBinding{}).Error
+func deleteUserOAuthBindingsByUserId(tx *gorm.DB, userId int) error {
+	return tx.Where("user_id = ?", userId).Delete(&UserOAuthBinding{}).Error
 }
 
 // GetBindingCountByUserId returns the number of custom OAuth bindings for a user

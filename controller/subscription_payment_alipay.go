@@ -98,13 +98,14 @@ func SubscriptionRequestAlipay(c *gin.Context) {
 	tradeNo := fmt.Sprintf("SUBALI%s%s", time.Now().Format("20060102150405"), randstr.String(6))
 
 	order := &model.SubscriptionOrder{
-		UserId:        userId,
-		PlanId:        plan.Id,
-		Money:         plan.PriceAmount,
-		TradeNo:       tradeNo,
-		PaymentMethod: model.PaymentMethodAlipayNative,
-		CreateTime:    time.Now().Unix(),
-		Status:        common.TopUpStatusPending,
+		UserId:          userId,
+		PlanId:          plan.Id,
+		Money:           plan.PriceAmount,
+		TradeNo:         tradeNo,
+		PaymentMethod:   model.PaymentMethodAlipayNative,
+		PaymentProvider: model.PaymentProviderAlipayNative,
+		CreateTime:      time.Now().Unix(),
+		Status:          common.TopUpStatusPending,
 	}
 	if err := order.Insert(); err != nil {
 		common.ApiErrorMsg(c, "创建订单失败")
@@ -127,12 +128,12 @@ func SubscriptionRequestAlipay(c *gin.Context) {
 		logger.LogInfo(c.Request.Context(), fmt.Sprintf("订阅支付宝下单[QR] user_id=%d trade_no=%s plan_id=%d money=%.2f notify_url=%q production=%t", userId, tradeNo, plan.Id, plan.PriceAmount, notifyURL, setting.AlipayProduction))
 		rsp, err := client.TradePreCreate(c.Request.Context(), p)
 		if err != nil {
-			_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentMethodAlipayNative)
+			_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderAlipayNative)
 			c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 			return
 		}
 		if rsp.IsFailure() {
-			_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentMethodAlipayNative)
+			_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderAlipayNative)
 			c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("%s: %s", rsp.Msg, rsp.SubMsg)})
 			return
 		}
@@ -159,7 +160,7 @@ func SubscriptionRequestAlipay(c *gin.Context) {
 		logger.LogInfo(c.Request.Context(), fmt.Sprintf("订阅支付宝下单[WAP] user_id=%d trade_no=%s plan_id=%d money=%.2f notify_url=%q return_url=%q production=%t", userId, tradeNo, plan.Id, plan.PriceAmount, notifyURL, returnURL, setting.AlipayProduction))
 		u, err := client.TradeWapPay(p)
 		if err != nil {
-			_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentMethodAlipayNative)
+			_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderAlipayNative)
 			c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 			return
 		}
@@ -175,7 +176,7 @@ func SubscriptionRequestAlipay(c *gin.Context) {
 		logger.LogInfo(c.Request.Context(), fmt.Sprintf("订阅支付宝下单[PC] user_id=%d trade_no=%s plan_id=%d money=%.2f notify_url=%q return_url=%q production=%t", userId, tradeNo, plan.Id, plan.PriceAmount, notifyURL, returnURL, setting.AlipayProduction))
 		u, err := client.TradePagePay(p)
 		if err != nil {
-			_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentMethodAlipayNative)
+			_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderAlipayNative)
 			c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 			return
 		}
@@ -237,7 +238,7 @@ func SubscriptionAlipayNotify(c *gin.Context) {
 
 	LockOrder(tradeNo)
 	defer UnlockOrder(tradeNo)
-	if err := model.CompleteSubscriptionOrder(tradeNo, common.GetJsonString(noti), model.PaymentMethodAlipayNative); err != nil {
+	if err := model.CompleteSubscriptionOrder(tradeNo, common.GetJsonString(noti), model.PaymentProviderAlipayNative, model.PaymentMethodAlipayNative); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("订阅支付宝订单加账失败 trade_no=%s error=%q", tradeNo, err.Error()))
 		c.String(http.StatusInternalServerError, "fail")
 		return
@@ -276,7 +277,7 @@ func SubscriptionAlipayReturn(c *gin.Context) {
 	if queryRsp.TradeStatus == alipay.TradeStatusSuccess || queryRsp.TradeStatus == alipay.TradeStatusFinished {
 		LockOrder(tradeNo)
 		defer UnlockOrder(tradeNo)
-		if err := model.CompleteSubscriptionOrder(tradeNo, common.GetJsonString(queryRsp), model.PaymentMethodAlipayNative); err != nil {
+		if err := model.CompleteSubscriptionOrder(tradeNo, common.GetJsonString(queryRsp), model.PaymentProviderAlipayNative, model.PaymentMethodAlipayNative); err != nil {
 			logger.LogError(ctx, fmt.Sprintf("订阅支付宝同步回跳加账失败 trade_no=%s error=%q", tradeNo, err.Error()))
 			c.Redirect(http.StatusFound, baseRedirect+"?pay=fail")
 			return

@@ -11,6 +11,7 @@ import (
 	json "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -35,8 +36,8 @@ type User struct {
 	OidcId           string         `json:"oidc_id" gorm:"column:oidc_id;index"`
 	WeChatId         string         `json:"wechat_id" gorm:"column:wechat_id;index"`
 	TelegramId       string         `json:"telegram_id" gorm:"column:telegram_id;index"`
-	VerificationCode string         `json:"verification_code" gorm:"-:all"`                                    // this field is only for Email verification, don't save it to database!
-	AccessToken      *string        `json:"access_token" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
+	VerificationCode string         `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
+	AccessToken      *string        `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
 	Quota            int            `json:"quota" gorm:"type:int;default:0"`
 	UsedQuota        int            `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
 	RequestCount     int            `json:"request_count" gorm:"type:int;default:0;"`               // request number
@@ -224,45 +225,45 @@ type UserSummary struct {
 }
 
 type UserBindingSummaryItem struct {
-	Key            string `json:"key"`
-	Label          string `json:"label"`
-	Value          string `json:"value"`
-	BindingType    string `json:"binding_type"`
-	ProviderId     *int   `json:"provider_id,omitempty"`
-	IsCustom       bool   `json:"is_custom"`
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Value       string `json:"value"`
+	BindingType string `json:"binding_type"`
+	ProviderId  *int   `json:"provider_id,omitempty"`
+	IsCustom    bool   `json:"is_custom"`
 }
 
 type UserReviewSummary struct {
-	User                *User                    `json:"user"`
-	Subscriptions       []SubscriptionSummary    `json:"subscriptions"`
-	Usage               map[string]interface{}   `json:"usage"`
-	Security            map[string]interface{}   `json:"security"`
-	Bindings            []UserBindingSummaryItem `json:"bindings"`
-	AvailableGroups     map[string]string        `json:"available_groups"`
-	HasSubscription     bool                     `json:"has_subscription"`
-	SubscriptionPlan    string                   `json:"subscription_plan"`
-	BillingPreference   string                   `json:"billing_preference"`
-	HasTwoFA            bool                     `json:"has_two_fa"`
-	HasPasskey          bool                     `json:"has_passkey"`
-	BindingCount        int                      `json:"binding_count"`
-	IsRecentlyActive    bool                     `json:"is_recently_active"`
-	LastActivityAt      int64                    `json:"last_activity_at"`
-	RecentlyActiveDays  int                      `json:"recently_active_days"`
+	User               *User                    `json:"user"`
+	Subscriptions      []SubscriptionSummary    `json:"subscriptions"`
+	Usage              map[string]interface{}   `json:"usage"`
+	Security           map[string]interface{}   `json:"security"`
+	Bindings           []UserBindingSummaryItem `json:"bindings"`
+	AvailableGroups    map[string]string        `json:"available_groups"`
+	HasSubscription    bool                     `json:"has_subscription"`
+	SubscriptionPlan   string                   `json:"subscription_plan"`
+	BillingPreference  string                   `json:"billing_preference"`
+	HasTwoFA           bool                     `json:"has_two_fa"`
+	HasPasskey         bool                     `json:"has_passkey"`
+	BindingCount       int                      `json:"binding_count"`
+	IsRecentlyActive   bool                     `json:"is_recently_active"`
+	LastActivityAt     int64                    `json:"last_activity_at"`
+	RecentlyActiveDays int                      `json:"recently_active_days"`
 }
 
 type AdminDashboardOverview struct {
-	TotalUsers          int64 `json:"total_users"`
-	EnabledUsers        int64 `json:"enabled_users"`
-	DisabledUsers       int64 `json:"disabled_users"`
-	DeletedUsers        int64 `json:"deleted_users"`
-	AdminUsers          int64 `json:"admin_users"`
-	TotalQuota          int64 `json:"total_quota"`
-	TotalUsedQuota      int64 `json:"total_used_quota"`
-	TotalRequestCount   int64 `json:"total_request_count"`
-	ActiveUsers24h      int64 `json:"active_users_24h"`
-	ActiveUsers7d       int64 `json:"active_users_7d"`
-	NewUsers24h         int64 `json:"new_users_24h"`
-	NewUsers7d          int64 `json:"new_users_7d"`
+	TotalUsers        int64 `json:"total_users"`
+	EnabledUsers      int64 `json:"enabled_users"`
+	DisabledUsers     int64 `json:"disabled_users"`
+	DeletedUsers      int64 `json:"deleted_users"`
+	AdminUsers        int64 `json:"admin_users"`
+	TotalQuota        int64 `json:"total_quota"`
+	TotalUsedQuota    int64 `json:"total_used_quota"`
+	TotalRequestCount int64 `json:"total_request_count"`
+	ActiveUsers24h    int64 `json:"active_users_24h"`
+	ActiveUsers7d     int64 `json:"active_users_7d"`
+	NewUsers24h       int64 `json:"new_users_24h"`
+	NewUsers7d        int64 `json:"new_users_7d"`
 }
 
 type AdminUserRankingItem struct {
@@ -599,7 +600,7 @@ func GetAdminDashboardOverview() (*AdminDashboardOverview, error) {
 
 func getAdminRankingQuery() *gorm.DB {
 	return DB.Model(&User{}).
-		Select("id, username, display_name, "+commonGroupCol+", request_count, used_quota, last_request_at").
+		Select("id, username, display_name, " + commonGroupCol + ", request_count, used_quota, last_request_at").
 		Where("deleted_at IS NULL")
 }
 
@@ -643,8 +644,8 @@ func GetUserReviewSummary(userId int) (*UserReviewSummary, error) {
 		availableGroups[groupName] = fmt.Sprintf("%.2f", ratio_setting.GetGroupRatio(groupName))
 	}
 	review := &UserReviewSummary{
-		User:              user,
-		Subscriptions:     subscriptions,
+		User:          user,
+		Subscriptions: subscriptions,
 		Usage: map[string]interface{}{
 			"request_count":   user.RequestCount,
 			"used_quota":      user.UsedQuota,
@@ -709,8 +710,12 @@ func HardDeleteUserById(id int) error {
 	if id == 0 {
 		return errors.New("id 为空！")
 	}
-	err := DB.Unscoped().Delete(&User{}, "id = ?", id).Error
-	return err
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := deleteUserOAuthBindingsByUserId(tx, id); err != nil {
+			return err
+		}
+		return tx.Unscoped().Delete(&User{}, "id = ?", id).Error
+	})
 }
 
 func inviteUser(inviterId int) (err error) {
@@ -804,7 +809,7 @@ func (user *User) Insert(inviterId int) error {
 	if common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
-	if inviterId != 0 {
+	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
 		if common.QuotaForInvitee > 0 {
 			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
 			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
@@ -866,7 +871,7 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 	if common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
-	if inviterId != 0 {
+	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
 		if common.QuotaForInvitee > 0 {
 			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
 			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
@@ -973,8 +978,12 @@ func (user *User) HardDelete() error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
-	err := DB.Unscoped().Delete(user).Error
-	return err
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := deleteUserOAuthBindingsByUserId(tx, user.Id); err != nil {
+			return err
+		}
+		return tx.Unscoped().Delete(user).Error
+	})
 }
 
 // ValidateAndFill check password & user status
@@ -1395,6 +1404,35 @@ func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {
 	//}
 }
 
+func updateUserQuotaUsedQuotaRequestCountAndLastRequestAt(id int, quota int, usedQuota int, requestCount int, lastRequestAt int64) {
+	if quota == 0 && usedQuota == 0 && requestCount == 0 && lastRequestAt <= 0 {
+		return
+	}
+
+	updates := map[string]interface{}{}
+	if quota != 0 {
+		updates["quota"] = gorm.Expr("quota + ?", quota)
+	}
+	if usedQuota != 0 {
+		updates["used_quota"] = gorm.Expr("used_quota + ?", usedQuota)
+	}
+	if requestCount != 0 {
+		updates["request_count"] = gorm.Expr("request_count + ?", requestCount)
+	}
+	if lastRequestAt > 0 {
+		updates["last_request_at"] = lastRequestAt
+	}
+
+	err := DB.Model(&User{}).Where("id = ?", id).Updates(updates).Error
+	if err != nil {
+		common.SysLog("failed to batch update user quota, used quota, request count and last request time: " + err.Error())
+	}
+}
+
+func updateUserQuotaUsedQuotaAndRequestCount(id int, quota int, usedQuota int, requestCount int) {
+	updateUserQuotaUsedQuotaRequestCountAndLastRequestAt(id, quota, usedQuota, requestCount, 0)
+}
+
 func updateUserUsedQuota(id int, quota int) {
 	err := DB.Model(&User{}).Where("id = ?", id).Updates(
 		map[string]interface{}{
@@ -1484,4 +1522,3 @@ func (user *User) FillUserByYaohuoId() error {
 	err := DB.Where("yaohuo_id = ?", user.YaohuoId).First(user).Error
 	return err
 }
-

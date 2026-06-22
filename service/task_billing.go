@@ -161,7 +161,7 @@ func BackfillTaskBillingFromConsumeLog(ctx context.Context, task *model.Task, re
 		return false
 	}
 
-	logs, _, err := model.GetUserLogs(task.UserId, model.LogTypeConsume, 0, 0, "", "", 0, 1, "", requestId)
+	logs, _, err := model.GetUserLogs(task.UserId, model.LogTypeConsume, 0, 0, "", "", 0, 1, "", requestId, "")
 	if err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("backfill task billing from consume log failed (task=%s, request_id=%s): %s", task.TaskID, requestId, err.Error()))
 		return false

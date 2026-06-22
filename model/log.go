@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -16,27 +17,42 @@ import (
 	"gorm.io/gorm"
 )
 
+func applyExplicitLogTextFilter(tx *gorm.DB, column string, value string) (*gorm.DB, error) {
+	if value == "" {
+		return tx, nil
+	}
+	if strings.Contains(value, "%") {
+		pattern, err := sanitizeLikePattern(value)
+		if err != nil {
+			return nil, err
+		}
+		return tx.Where(column+" LIKE ? ESCAPE '!'", pattern), nil
+	}
+	return tx.Where(column+" = ?", value), nil
+}
+
 type Log struct {
-	Id               int    `json:"id" gorm:"index:idx_created_at_id,priority:1;index:idx_user_id_id,priority:2"`
-	UserId           int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
-	CreatedAt        int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:2;index:idx_created_at_type"`
-	Type             int    `json:"type" gorm:"index:idx_created_at_type"`
-	Content          string `json:"content"`
-	Username         string `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
-	TokenName        string `json:"token_name" gorm:"index;default:''"`
-	ModelName        string `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
-	Quota            int    `json:"quota" gorm:"default:0"`
-	PromptTokens     int    `json:"prompt_tokens" gorm:"default:0"`
-	CompletionTokens int    `json:"completion_tokens" gorm:"default:0"`
-	UseTime          int    `json:"use_time" gorm:"default:0"`
-	IsStream         bool   `json:"is_stream"`
-	ChannelId        int    `json:"channel" gorm:"index"`
-	ChannelName      string `json:"channel_name" gorm:"->"`
-	TokenId          int    `json:"token_id" gorm:"default:0;index"`
-	Group            string `json:"group" gorm:"index"`
-	Ip               string `json:"ip" gorm:"index;default:''"`
-	RequestId        string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
-	Other            string `json:"other"`
+	Id                int    `json:"id" gorm:"index:idx_created_at_id,priority:2;index:idx_user_id_id,priority:2"`
+	UserId            int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
+	CreatedAt         int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:1;index:idx_created_at_type"`
+	Type              int    `json:"type" gorm:"index:idx_created_at_type"`
+	Content           string `json:"content"`
+	Username          string `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
+	TokenName         string `json:"token_name" gorm:"index;default:''"`
+	ModelName         string `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
+	Quota             int    `json:"quota" gorm:"default:0"`
+	PromptTokens      int    `json:"prompt_tokens" gorm:"default:0"`
+	CompletionTokens  int    `json:"completion_tokens" gorm:"default:0"`
+	UseTime           int    `json:"use_time" gorm:"default:0"`
+	IsStream          bool   `json:"is_stream"`
+	ChannelId         int    `json:"channel" gorm:"index"`
+	ChannelName       string `json:"channel_name" gorm:"->"`
+	TokenId           int    `json:"token_id" gorm:"default:0;index"`
+	Group             string `json:"group" gorm:"index"`
+	Ip                string `json:"ip" gorm:"index;default:''"`
+	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
+	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
+	Other             string `json:"other"`
 }
 
 // don't use iota, avoid change log type value
@@ -48,6 +64,7 @@ const (
 	LogTypeSystem  = 4
 	LogTypeError   = 5
 	LogTypeRefund  = 6
+	LogTypeLogin   = 7
 )
 
 func formatUserLogs(logs []*Log, startIdx int) {
@@ -58,6 +75,8 @@ func formatUserLogs(logs []*Log, startIdx int) {
 		if otherMap != nil {
 			// Remove admin-only debug fields.
 			delete(otherMap, "admin_info")
+			// Remove operation-audit details (operator/route info), admin-only.
+			delete(otherMap, "audit_info")
 			// delete(otherMap, "reject_reason")
 			delete(otherMap, "stream_status")
 		}
@@ -114,6 +133,74 @@ func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo m
 	}
 }
 
+// buildOpField 构建语言无关的操作描述（写入 Other.op）。
+// 前端依据 action(稳定操作标识) + params(结构化参数) 在渲染期用 i18n 本地化展示，
+// 因此不在数据库中存储自然语言句子。
+func buildOpField(action string, params map[string]interface{}) map[string]interface{} {
+	op := map[string]interface{}{
+		"action": action,
+	}
+	if len(params) > 0 {
+		op["params"] = params
+	}
+	return op
+}
+
+// RecordLoginLog 记录用户登录成功的审计日志（type=LogTypeLogin）。
+// username 由调用方传入（登录流程已持有用户对象），避免额外的数据库查询。
+// content 为英文兜底文本（用于导出/经典前端）；action+params 供前端本地化渲染。
+// extra 可携带 login_method、user_agent 等附加信息（普通用户可见）。
+func RecordLoginLog(userId int, username string, content string, ip string, action string, params map[string]interface{}, extra map[string]interface{}) {
+	other := map[string]interface{}{}
+	for k, v := range extra {
+		other[k] = v
+	}
+	other["op"] = buildOpField(action, params)
+	log := &Log{
+		UserId:    userId,
+		Username:  username,
+		CreatedAt: common.GetTimestamp(),
+		Type:      LogTypeLogin,
+		Content:   content,
+		Ip:        ip,
+		Other:     common.MapToJsonStr(other),
+	}
+	if err := LOG_DB.Create(log).Error; err != nil {
+		common.SysLog("failed to record login log: " + err.Error())
+	}
+}
+
+// RecordOperationAuditLog 记录管理/高危操作审计日志（type=LogTypeManage）。
+// logUserId 为日志归属者（面向用户的操作如额度调整归属目标用户，资源类操作如渠道/系统设置归属操作者），
+// username 内部按 logUserId 查询。content 为英文兜底文本（导出/经典前端用）。
+// action+params 写入 Other.op，供前端本地化渲染（普通用户可见，不含敏感信息）。
+// adminInfo 存放操作者身份（写入 Other.admin_info，普通用户查询时剥离）；
+// auditInfo 存放路由/方法/结果等中间件兜底信息（写入 Other.audit_info，普通用户查询时剥离）。
+func RecordOperationAuditLog(logUserId int, content string, ip string, action string, params map[string]interface{}, adminInfo map[string]interface{}, auditInfo map[string]interface{}) {
+	username, _ := GetUsernameById(logUserId, false)
+	other := map[string]interface{}{
+		"op": buildOpField(action, params),
+	}
+	if len(adminInfo) > 0 {
+		other["admin_info"] = adminInfo
+	}
+	if len(auditInfo) > 0 {
+		other["audit_info"] = auditInfo
+	}
+	log := &Log{
+		UserId:    logUserId,
+		Username:  username,
+		CreatedAt: common.GetTimestamp(),
+		Type:      LogTypeManage,
+		Content:   content,
+		Ip:        ip,
+		Other:     common.MapToJsonStr(other),
+	}
+	if err := LOG_DB.Create(log).Error; err != nil {
+		common.SysLog("failed to record operation audit log: " + err.Error())
+	}
+}
+
 func RecordTopupLog(userId int, content string, callerIp string, paymentMethod string, callbackPaymentMethod string) {
 	username, _ := GetUsernameById(userId, false)
 	adminInfo := map[string]interface{}{
@@ -144,9 +231,10 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 
 func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
 	isStream bool, group string, other map[string]interface{}) {
-	logger.LogInfo(c, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, channelId, modelName, tokenName, content))
+	logger.LogInfo(c, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, channelId, modelName, tokenName, common.LocalLogPreview(content)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
+	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	otherStr := common.MapToJsonStr(other)
 	// 判断是否需要记录 IP
 	needRecordIp := false
@@ -177,8 +265,9 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 			}
 			return ""
 		}(),
-		RequestId: requestId,
-		Other:     otherStr,
+		RequestId:         requestId,
+		UpstreamRequestId: upstreamRequestId,
+		Other:             otherStr,
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
@@ -208,6 +297,8 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
+	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
+	createdAt := common.GetTimestamp()
 	otherStr := common.MapToJsonStr(params.Other)
 	// 判断是否需要记录 IP
 	needRecordIp := false
@@ -219,7 +310,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	log := &Log{
 		UserId:           userId,
 		Username:         username,
-		CreatedAt:        common.GetTimestamp(),
+		CreatedAt:        createdAt,
 		Type:             LogTypeConsume,
 		Content:          params.Content,
 		PromptTokens:     params.PromptTokens,
@@ -238,8 +329,9 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			}
 			return ""
 		}(),
-		RequestId: requestId,
-		Other:     otherStr,
+		RequestId:         requestId,
+		UpstreamRequestId: upstreamRequestId,
+		Other:             otherStr,
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
@@ -247,7 +339,18 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	}
 	if common.DataExportEnabled {
 		gopool.Go(func() {
-			LogQuotaData(userId, username, params.ModelName, params.Quota, common.GetTimestamp(), params.PromptTokens+params.CompletionTokens)
+			LogQuotaData(QuotaDataLogParams{
+				UserID:    userId,
+				Username:  username,
+				ModelName: params.ModelName,
+				Quota:     params.Quota,
+				CreatedAt: createdAt,
+				TokenUsed: params.PromptTokens + params.CompletionTokens,
+				UseGroup:  params.Group,
+				TokenID:   params.TokenId,
+				ChannelID: params.ChannelId,
+				NodeName:  common.NodeName,
+			})
 		})
 	}
 }
@@ -275,10 +378,11 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 			tokenName = token.Name
 		}
 	}
+	createdAt := common.GetTimestamp()
 	log := &Log{
 		UserId:    params.UserId,
 		Username:  username,
-		CreatedAt: common.GetTimestamp(),
+		CreatedAt: createdAt,
 		Type:      params.LogType,
 		Content:   params.Content,
 		TokenName: tokenName,
@@ -293,9 +397,24 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	if err != nil {
 		common.SysLog("failed to record task billing log: " + err.Error())
 	}
+	if params.LogType == LogTypeConsume && common.DataExportEnabled {
+		gopool.Go(func() {
+			LogQuotaData(QuotaDataLogParams{
+				UserID:    params.UserId,
+				Username:  username,
+				ModelName: params.ModelName,
+				Quota:     params.Quota,
+				CreatedAt: createdAt,
+				UseGroup:  params.Group,
+				TokenID:   params.TokenId,
+				ChannelID: params.ChannelId,
+				NodeName:  common.NodeName,
+			})
+		})
+	}
 }
 
-func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string) (logs []*Log, total int64, err error) {
+func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB
@@ -303,17 +422,20 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 		tx = LOG_DB.Where("logs.type = ?", logType)
 	}
 
-	if modelName != "" {
-		tx = tx.Where("logs.model_name like ?", modelName)
+	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
+		return nil, 0, err
 	}
-	if username != "" {
-		tx = tx.Where("logs.username = ?", username)
+	if tx, err = applyExplicitLogTextFilter(tx, "logs.username", username); err != nil {
+		return nil, 0, err
 	}
 	if tokenName != "" {
 		tx = tx.Where("logs.token_name = ?", tokenName)
 	}
 	if requestId != "" {
 		tx = tx.Where("logs.request_id = ?", requestId)
+	}
+	if upstreamRequestId != "" {
+		tx = tx.Where("logs.upstream_request_id = ?", upstreamRequestId)
 	}
 	if startTimestamp != 0 {
 		tx = tx.Where("logs.created_at >= ?", startTimestamp)
@@ -331,7 +453,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	if err != nil {
 		return nil, 0, err
 	}
-	err = tx.Order("logs.id desc").Limit(num).Offset(startIdx).Find(&logs).Error
+	err = tx.Order("logs.created_at desc, logs.id desc").Limit(num).Offset(startIdx).Find(&logs).Error
 	if err != nil {
 		return nil, 0, err
 	}
@@ -381,7 +503,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 
 const logSearchCountLimit = 10000
 
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string) (logs []*Log, total int64, err error) {
+func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB.Where("logs.user_id = ?", userId)
@@ -389,18 +511,17 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 		tx = LOG_DB.Where("logs.user_id = ? and logs.type = ?", userId, logType)
 	}
 
-	if modelName != "" {
-		modelNamePattern, err := sanitizeLikePattern(modelName)
-		if err != nil {
-			return nil, 0, err
-		}
-		tx = tx.Where("logs.model_name LIKE ? ESCAPE '!'", modelNamePattern)
+	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
+		return nil, 0, err
 	}
 	if tokenName != "" {
 		tx = tx.Where("logs.token_name = ?", tokenName)
 	}
 	if requestId != "" {
 		tx = tx.Where("logs.request_id = ?", requestId)
+	}
+	if upstreamRequestId != "" {
+		tx = tx.Where("logs.upstream_request_id = ?", upstreamRequestId)
 	}
 	if startTimestamp != 0 {
 		tx = tx.Where("logs.created_at >= ?", startTimestamp)
@@ -438,9 +559,11 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	// 为rpm和tpm创建单独的查询
 	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, sum(prompt_tokens) + sum(completion_tokens) tpm")
 
-	if username != "" {
-		tx = tx.Where("username = ?", username)
-		rpmTpmQuery = rpmTpmQuery.Where("username = ?", username)
+	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
+		return stat, err
+	}
+	if rpmTpmQuery, err = applyExplicitLogTextFilter(rpmTpmQuery, "username", username); err != nil {
+		return stat, err
 	}
 	if tokenName != "" {
 		tx = tx.Where("token_name = ?", tokenName)
@@ -452,13 +575,11 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	if endTimestamp != 0 {
 		tx = tx.Where("created_at <= ?", endTimestamp)
 	}
-	if modelName != "" {
-		modelNamePattern, err := sanitizeLikePattern(modelName)
-		if err != nil {
-			return stat, err
-		}
-		tx = tx.Where("model_name LIKE ? ESCAPE '!'", modelNamePattern)
-		rpmTpmQuery = rpmTpmQuery.Where("model_name LIKE ? ESCAPE '!'", modelNamePattern)
+	if tx, err = applyExplicitLogTextFilter(tx, "model_name", modelName); err != nil {
+		return stat, err
+	}
+	if rpmTpmQuery, err = applyExplicitLogTextFilter(rpmTpmQuery, "model_name", modelName); err != nil {
+		return stat, err
 	}
 	if channel != 0 {
 		tx = tx.Where("channel_id = ?", channel)
@@ -535,192 +656,192 @@ func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64,
 // ===================== Admin Dashboard Aggregations (logs-based) =====================
 
 type AdminTodayStats struct {
-WindowStart  int64 `json:"window_start"`
-WindowEnd    int64 `json:"window_end"`
-Quota        int64 `json:"quota"`
-Tokens       int64 `json:"tokens"`
-Requests     int64 `json:"requests"`
-ActiveUsers  int64 `json:"active_users"`
+	WindowStart int64 `json:"window_start"`
+	WindowEnd   int64 `json:"window_end"`
+	Quota       int64 `json:"quota"`
+	Tokens      int64 `json:"tokens"`
+	Requests    int64 `json:"requests"`
+	ActiveUsers int64 `json:"active_users"`
 
-YesterdayQuota       int64 `json:"yesterday_quota"`
-YesterdayTokens      int64 `json:"yesterday_tokens"`
-YesterdayRequests    int64 `json:"yesterday_requests"`
-YesterdayActiveUsers int64 `json:"yesterday_active_users"`
+	YesterdayQuota       int64 `json:"yesterday_quota"`
+	YesterdayTokens      int64 `json:"yesterday_tokens"`
+	YesterdayRequests    int64 `json:"yesterday_requests"`
+	YesterdayActiveUsers int64 `json:"yesterday_active_users"`
 }
 
 type AdminUserUsageRankItem struct {
-UserId       int    `json:"user_id"`
-Username     string `json:"username"`
-Quota        int64  `json:"quota"`
-Requests     int64  `json:"requests"`
-Tokens       int64  `json:"tokens"`
-TopModelName string `json:"top_model_name"`
+	UserId       int    `json:"user_id"`
+	Username     string `json:"username"`
+	Quota        int64  `json:"quota"`
+	Requests     int64  `json:"requests"`
+	Tokens       int64  `json:"tokens"`
+	TopModelName string `json:"top_model_name"`
 }
 
 type AdminModelUsageItem struct {
-ModelName string `json:"model_name"`
-Quota     int64  `json:"quota"`
-Requests  int64  `json:"requests"`
-Tokens    int64  `json:"tokens"`
+	ModelName string `json:"model_name"`
+	Quota     int64  `json:"quota"`
+	Requests  int64  `json:"requests"`
+	Tokens    int64  `json:"tokens"`
 }
 
 // periodToRange converts a period token (today / 7d / 30d / all) into [start, end]
 // unix-second timestamps. For "all" the start is 0.
 func periodToRange(period string) (int64, int64) {
-now := time.Now().Unix()
-switch period {
-case "today":
-t := time.Now()
-start := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location()).Unix()
-return start, now
-case "7d":
-return now - 7*86400, now
-case "30d":
-return now - 30*86400, now
-case "all":
-return 0, now
-default:
-t := time.Now()
-start := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location()).Unix()
-return start, now
-}
+	now := time.Now().Unix()
+	switch period {
+	case "today":
+		t := time.Now()
+		start := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location()).Unix()
+		return start, now
+	case "7d":
+		return now - 7*86400, now
+	case "30d":
+		return now - 30*86400, now
+	case "all":
+		return 0, now
+	default:
+		t := time.Now()
+		start := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location()).Unix()
+		return start, now
+	}
 }
 
 func aggregateLogWindow(start, end int64) (quota, tokens, requests, activeUsers int64, err error) {
-type aggRow struct {
-Quota       int64 `gorm:"column:quota"`
-Tokens      int64 `gorm:"column:tokens"`
-Requests    int64 `gorm:"column:requests"`
-ActiveUsers int64 `gorm:"column:active_users"`
-}
-var row aggRow
-tx := LOG_DB.Table("logs").
-Select("COALESCE(SUM(quota),0) AS quota, " +
-"COALESCE(SUM(prompt_tokens + completion_tokens),0) AS tokens, " +
-"COUNT(*) AS requests, " +
-"COUNT(DISTINCT user_id) AS active_users").
-Where("type = ?", LogTypeConsume).
-Where("created_at >= ? AND created_at < ?", start, end)
-if err = tx.Scan(&row).Error; err != nil {
-return
-}
-return row.Quota, row.Tokens, row.Requests, row.ActiveUsers, nil
+	type aggRow struct {
+		Quota       int64 `gorm:"column:quota"`
+		Tokens      int64 `gorm:"column:tokens"`
+		Requests    int64 `gorm:"column:requests"`
+		ActiveUsers int64 `gorm:"column:active_users"`
+	}
+	var row aggRow
+	tx := LOG_DB.Table("logs").
+		Select("COALESCE(SUM(quota),0) AS quota, "+
+			"COALESCE(SUM(prompt_tokens + completion_tokens),0) AS tokens, "+
+			"COUNT(*) AS requests, "+
+			"COUNT(DISTINCT user_id) AS active_users").
+		Where("type = ?", LogTypeConsume).
+		Where("created_at >= ? AND created_at < ?", start, end)
+	if err = tx.Scan(&row).Error; err != nil {
+		return
+	}
+	return row.Quota, row.Tokens, row.Requests, row.ActiveUsers, nil
 }
 
 // GetAdminTodayStats returns aggregates for "today" (00:00 local..now) and
 // "yesterday" (previous full local day) windows derived from the logs table.
 func GetAdminTodayStats() (*AdminTodayStats, error) {
-t := time.Now()
-todayStart := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location()).Unix()
-now := t.Unix()
-yesterdayStart := todayStart - 86400
+	t := time.Now()
+	todayStart := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location()).Unix()
+	now := t.Unix()
+	yesterdayStart := todayStart - 86400
 
-stats := &AdminTodayStats{
-WindowStart: todayStart,
-WindowEnd:   now,
-}
-q, tk, r, au, err := aggregateLogWindow(todayStart, now)
-if err != nil {
-return nil, err
-}
-stats.Quota, stats.Tokens, stats.Requests, stats.ActiveUsers = q, tk, r, au
+	stats := &AdminTodayStats{
+		WindowStart: todayStart,
+		WindowEnd:   now,
+	}
+	q, tk, r, au, err := aggregateLogWindow(todayStart, now)
+	if err != nil {
+		return nil, err
+	}
+	stats.Quota, stats.Tokens, stats.Requests, stats.ActiveUsers = q, tk, r, au
 
-q, tk, r, au, err = aggregateLogWindow(yesterdayStart, todayStart)
-if err != nil {
-return nil, err
-}
-stats.YesterdayQuota, stats.YesterdayTokens, stats.YesterdayRequests, stats.YesterdayActiveUsers = q, tk, r, au
-return stats, nil
+	q, tk, r, au, err = aggregateLogWindow(yesterdayStart, todayStart)
+	if err != nil {
+		return nil, err
+	}
+	stats.YesterdayQuota, stats.YesterdayTokens, stats.YesterdayRequests, stats.YesterdayActiveUsers = q, tk, r, au
+	return stats, nil
 }
 
 // GetAdminUserUsageRankings returns the top-N users (by consumed quota) within
 // the requested time window. The username is taken from the log row to avoid a
 // JOIN; an extra sub-query gives each user's most-used model in the window.
 func GetAdminUserUsageRankings(period string, limit int) ([]AdminUserUsageRankItem, error) {
-if limit <= 0 {
-limit = 10
-}
-if limit > 50 {
-limit = 50
-}
-start, end := periodToRange(period)
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	start, end := periodToRange(period)
 
-type row struct {
-UserId   int    `gorm:"column:user_id"`
-Username string `gorm:"column:username"`
-Quota    int64  `gorm:"column:quota"`
-Requests int64  `gorm:"column:requests"`
-Tokens   int64  `gorm:"column:tokens"`
-}
-var rows []row
-tx := LOG_DB.Table("logs").
-Select("user_id, MAX(username) AS username, " +
-"COALESCE(SUM(quota),0) AS quota, " +
-"COUNT(*) AS requests, " +
-"COALESCE(SUM(prompt_tokens + completion_tokens),0) AS tokens").
-Where("type = ?", LogTypeConsume).
-Where("created_at >= ? AND created_at < ?", start, end).
-Group("user_id").
-Order("quota DESC, requests DESC").
-Limit(limit)
-if err := tx.Scan(&rows).Error; err != nil {
-return nil, err
-}
+	type row struct {
+		UserId   int    `gorm:"column:user_id"`
+		Username string `gorm:"column:username"`
+		Quota    int64  `gorm:"column:quota"`
+		Requests int64  `gorm:"column:requests"`
+		Tokens   int64  `gorm:"column:tokens"`
+	}
+	var rows []row
+	tx := LOG_DB.Table("logs").
+		Select("user_id, MAX(username) AS username, "+
+			"COALESCE(SUM(quota),0) AS quota, "+
+			"COUNT(*) AS requests, "+
+			"COALESCE(SUM(prompt_tokens + completion_tokens),0) AS tokens").
+		Where("type = ?", LogTypeConsume).
+		Where("created_at >= ? AND created_at < ?", start, end).
+		Group("user_id").
+		Order("quota DESC, requests DESC").
+		Limit(limit)
+	if err := tx.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
 
-result := make([]AdminUserUsageRankItem, 0, len(rows))
-for _, r := range rows {
-item := AdminUserUsageRankItem{
-UserId:   r.UserId,
-Username: r.Username,
-Quota:    r.Quota,
-Requests: r.Requests,
-Tokens:   r.Tokens,
-}
-// Per-user top model (best-effort; ignore errors).
-var topRow struct {
-ModelName string `gorm:"column:model_name"`
-}
-_ = LOG_DB.Table("logs").
-Select("model_name").
-Where("type = ?", LogTypeConsume).
-Where("user_id = ?", r.UserId).
-Where("created_at >= ? AND created_at < ?", start, end).
-Where("model_name <> ''").
-Group("model_name").
-Order("SUM(quota) DESC").
-Limit(1).
-Scan(&topRow).Error
-item.TopModelName = topRow.ModelName
-result = append(result, item)
-}
-return result, nil
+	result := make([]AdminUserUsageRankItem, 0, len(rows))
+	for _, r := range rows {
+		item := AdminUserUsageRankItem{
+			UserId:   r.UserId,
+			Username: r.Username,
+			Quota:    r.Quota,
+			Requests: r.Requests,
+			Tokens:   r.Tokens,
+		}
+		// Per-user top model (best-effort; ignore errors).
+		var topRow struct {
+			ModelName string `gorm:"column:model_name"`
+		}
+		_ = LOG_DB.Table("logs").
+			Select("model_name").
+			Where("type = ?", LogTypeConsume).
+			Where("user_id = ?", r.UserId).
+			Where("created_at >= ? AND created_at < ?", start, end).
+			Where("model_name <> ''").
+			Group("model_name").
+			Order("SUM(quota) DESC").
+			Limit(1).
+			Scan(&topRow).Error
+		item.TopModelName = topRow.ModelName
+		result = append(result, item)
+	}
+	return result, nil
 }
 
 // GetAdminModelUsageStats returns the top-N models by consumed quota in the
 // requested window.
 func GetAdminModelUsageStats(period string, limit int) ([]AdminModelUsageItem, error) {
-if limit <= 0 {
-limit = 10
-}
-if limit > 50 {
-limit = 50
-}
-start, end := periodToRange(period)
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	start, end := periodToRange(period)
 
-var items []AdminModelUsageItem
-tx := LOG_DB.Table("logs").
-Select("model_name, " +
-"COALESCE(SUM(quota),0) AS quota, " +
-"COUNT(*) AS requests, " +
-"COALESCE(SUM(prompt_tokens + completion_tokens),0) AS tokens").
-Where("type = ?", LogTypeConsume).
-Where("created_at >= ? AND created_at < ?", start, end).
-Where("model_name <> ''").
-Group("model_name").
-Order("quota DESC").
-Limit(limit)
-if err := tx.Scan(&items).Error; err != nil {
-return nil, err
-}
-return items, nil
+	var items []AdminModelUsageItem
+	tx := LOG_DB.Table("logs").
+		Select("model_name, "+
+			"COALESCE(SUM(quota),0) AS quota, "+
+			"COUNT(*) AS requests, "+
+			"COALESCE(SUM(prompt_tokens + completion_tokens),0) AS tokens").
+		Where("type = ?", LogTypeConsume).
+		Where("created_at >= ? AND created_at < ?", start, end).
+		Where("model_name <> ''").
+		Group("model_name").
+		Order("quota DESC").
+		Limit(limit)
+	if err := tx.Scan(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
 }

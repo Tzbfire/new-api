@@ -11,11 +11,16 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
 var group2model2channels map[string]map[string][]int // enabled channel
 var channelsIDM map[int]*Channel                     // all channels include disabled
+// channel2advancedCustomConfig caches parsed Advanced Custom (type 58) configs so
+// path-aware selection avoids re-parsing JSON per request. Refreshed on full sync.
+var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
 var channelSyncLock sync.RWMutex
 
 func InitChannelCache() {
@@ -23,10 +28,16 @@ func InitChannelCache() {
 		return
 	}
 	newChannelId2channel := make(map[int]*Channel)
+	newChannel2advancedCustomConfig := make(map[int]*dto.AdvancedCustomConfig)
 	var channels []*Channel
 	DB.Find(&channels)
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
+		if channel.Type == constant.ChannelTypeAdvancedCustom {
+			if config := channel.GetOtherSettings().AdvancedCustom; config != nil {
+				newChannel2advancedCustomConfig[channel.Id] = config
+			}
+		}
 	}
 	var abilities []*Ability
 	DB.Find(&abilities)
@@ -81,6 +92,7 @@ func InitChannelCache() {
 		}
 	}
 	channelsIDM = newChannelId2channel
+	channel2advancedCustomConfig = newChannel2advancedCustomConfig
 	channelSyncLock.Unlock()
 	common.SysLog("channels synced from database")
 }
@@ -93,20 +105,9 @@ func SyncChannelCache(frequency int) {
 	}
 }
 
-// getChannelFromDBWithImageSizeTierFilter 在内存缓存禁用时，按图片分辨率档位从数据库选择渠道。
-//
-// 不同于 GetChannel 的「按 weight 单次随机命中」策略，本函数：
-//  1. 先按 group/model/retry 取出候选渠道全集；
-//  2. 加载这些渠道的完整 Channel 行（含 setting JSON）；
-//  3. 在 Go 侧按 AllowsImageSizeTier(tier) 过滤；
-//  4. 从过滤后的候选中按 weight+10 加权随机命中。
-//
-// 如此可保证非缓存模式下，渠道的 SupportedImageSizeTiers 限制依然生效。
-func getChannelFromDBWithImageSizeTierFilter(group string, model string, retry int, imageSizeTier string) (*Channel, error) {
-	if imageSizeTier == "" {
-		return GetChannel(group, model, retry)
-	}
-
+// getChannelFromDBWithFilters selects a channel from DB when memory cache is disabled,
+// applying both Advanced Custom request-path filtering and image size tier filtering.
+func getChannelFromDBWithFilters(group string, model string, retry int, requestPath string, imageSizeTier string) (*Channel, error) {
 	channelQuery, err := getChannelQuery(group, model, retry)
 	if err != nil {
 		return nil, err
@@ -115,72 +116,85 @@ func getChannelFromDBWithImageSizeTierFilter(group string, model string, retry i
 	if err := channelQuery.Order("weight DESC").Find(&abilities).Error; err != nil {
 		return nil, err
 	}
+	abilities = filterAbilitiesByRequestPath(abilities, requestPath)
+	if imageSizeTier != "" && len(abilities) > 0 {
+		channelIds := make([]int, 0, len(abilities))
+		seen := make(map[int]struct{}, len(abilities))
+		for _, ability := range abilities {
+			if _, ok := seen[ability.ChannelId]; ok {
+				continue
+			}
+			seen[ability.ChannelId] = struct{}{}
+			channelIds = append(channelIds, ability.ChannelId)
+		}
+
+		var channels []Channel
+		if err := DB.Where("id IN ?", channelIds).Find(&channels).Error; err != nil {
+			return nil, err
+		}
+		allowed := make(map[int]struct{}, len(channels))
+		for i := range channels {
+			if channels[i].AllowsImageSizeTier(imageSizeTier) {
+				allowed[channels[i].Id] = struct{}{}
+			}
+		}
+		filtered := make([]Ability, 0, len(abilities))
+		for _, ability := range abilities {
+			if _, ok := allowed[ability.ChannelId]; ok {
+				filtered = append(filtered, ability)
+			}
+		}
+		abilities = filtered
+	}
+
 	if len(abilities) == 0 {
 		return nil, nil
 	}
 
-	channelIds := make([]int, 0, len(abilities))
-	weightById := make(map[int]uint, len(abilities))
-	for _, a := range abilities {
-		channelIds = append(channelIds, a.ChannelId)
-		weightById[a.ChannelId] = a.Weight
-	}
-
-	var channels []Channel
-	if err := DB.Where("id IN ?", channelIds).Find(&channels).Error; err != nil {
-		return nil, err
-	}
-
-	filtered := make([]Channel, 0, len(channels))
-	for _, ch := range channels {
-		if ch.AllowsImageSizeTier(imageSizeTier) {
-			filtered = append(filtered, ch)
-		}
-	}
-	if len(filtered) == 0 {
-		return nil, nil
-	}
-
 	weightSum := uint(0)
-	for _, ch := range filtered {
-		weightSum += weightById[ch.Id] + 10
+	for _, ability := range abilities {
+		weightSum += ability.Weight + 10
 	}
-	pick := common.GetRandomInt(int(weightSum))
-	for i := range filtered {
-		pick -= int(weightById[filtered[i].Id]) + 10
-		if pick <= 0 {
-			return &filtered[i], nil
+	weight := common.GetRandomInt(int(weightSum))
+	channelId := 0
+	for _, ability := range abilities {
+		weight -= int(ability.Weight) + 10
+		if weight <= 0 {
+			channelId = ability.ChannelId
+			break
 		}
 	}
-	return &filtered[len(filtered)-1], nil
+	if channelId == 0 {
+		channelId = abilities[len(abilities)-1].ChannelId
+	}
+
+	channel := Channel{}
+	err = DB.First(&channel, "id = ?", channelId).Error
+	return &channel, err
 }
 
-func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel, error) {
-	return GetRandomSatisfiedChannelWithFilter(group, model, retry, "")
+func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return GetRandomSatisfiedChannelWithFilter(group, model, retry, requestPath, "")
 }
 
-// GetRandomSatisfiedChannelWithFilter 在 GetRandomSatisfiedChannel 基础上增加按图片分辨率档位过滤。
-// imageSizeTier 为空时退化为不过滤的原行为；非空时只在候选渠道中保留 AllowsImageSizeTier(tier) 为 true 的。
-//
-// 「未配置 SupportedImageSizeTiers 的渠道」会被视为通用渠道，自动匹配任何档位 → 即天然兜底。
-// 因此当所有候选渠道都「明确声明」不支持当前档位时，本函数会返回 (nil, nil)，
-// 让上层走标准「无可用渠道」的错误路径，避免误把请求路由到明确拒绝该档位的渠道。
-func GetRandomSatisfiedChannelWithFilter(group string, model string, retry int, imageSizeTier string) (*Channel, error) {
+// GetRandomSatisfiedChannelWithFilter applies request-path filtering for Advanced Custom
+// channels and optional image resolution tier filtering for image generation routing.
+func GetRandomSatisfiedChannelWithFilter(group string, model string, retry int, requestPath string, imageSizeTier string) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return getChannelFromDBWithImageSizeTierFilter(group, model, retry, imageSizeTier)
+		return getChannelFromDBWithFilters(group, model, retry, requestPath, imageSizeTier)
 	}
 
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
 	// First, try to find channels with the exact model name.
-	channels := group2model2channels[group][model]
+	channels := filterChannelsByRequestPath(group2model2channels[group][model], requestPath)
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
-		channels = group2model2channels[group][normalizedModel]
+		channels = filterChannelsByRequestPath(group2model2channels[group][normalizedModel], requestPath)
 	}
 
 	if len(channels) == 0 {
@@ -275,6 +289,34 @@ func GetRandomSatisfiedChannelWithFilter(group string, model string, retry int, 
 	return nil, errors.New("channel not found")
 }
 
+// filterChannelsByRequestPath restricts candidates by request path. Only Advanced
+// Custom (type 58) channels are path-checked: they are kept only when one of their
+// configured routes matches requestPath. All other channel types always pass.
+// When requestPath is empty (non-relay callers) filtering is skipped.
+// Caller must hold channelSyncLock (read lock). The cached slice is never mutated.
+func filterChannelsByRequestPath(channels []int, requestPath string) []int {
+	if requestPath == "" || len(channels) == 0 {
+		return channels
+	}
+	filtered := make([]int, 0, len(channels))
+	for _, channelId := range channels {
+		channel, ok := channelsIDM[channelId]
+		if !ok {
+			// keep it so the downstream consistency error is raised as before
+			filtered = append(filtered, channelId)
+			continue
+		}
+		if channel.Type != constant.ChannelTypeAdvancedCustom {
+			filtered = append(filtered, channelId)
+			continue
+		}
+		if config := channel2advancedCustomConfig[channelId]; config != nil && config.SupportsPath(requestPath) {
+			filtered = append(filtered, channelId)
+		}
+	}
+	return filtered
+}
+
 func CacheGetChannel(id int) (*Channel, error) {
 	if !common.MemoryCacheEnabled {
 		return GetChannelById(id, true)
@@ -342,9 +384,12 @@ func CacheUpdateChannel(channel *Channel) {
 		return
 	}
 
-	println("CacheUpdateChannel:", channel.Id, channel.Name, channel.Status, channel.ChannelInfo.MultiKeyPollingIndex)
-
-	println("before:", channelsIDM[channel.Id].ChannelInfo.MultiKeyPollingIndex)
+	if channelsIDM == nil {
+		channelsIDM = make(map[int]*Channel)
+	}
+	if oldChannel, ok := channelsIDM[channel.Id]; ok {
+		logger.LogDebug(nil, "CacheUpdateChannel before: id=%d, name=%s, status=%d, polling_index=%d", channel.Id, channel.Name, channel.Status, oldChannel.ChannelInfo.MultiKeyPollingIndex)
+	}
 	channelsIDM[channel.Id] = channel
-	println("after :", channelsIDM[channel.Id].ChannelInfo.MultiKeyPollingIndex)
+	logger.LogDebug(nil, "CacheUpdateChannel after: id=%d, name=%s, status=%d, polling_index=%d", channel.Id, channel.Name, channel.Status, channel.ChannelInfo.MultiKeyPollingIndex)
 }
