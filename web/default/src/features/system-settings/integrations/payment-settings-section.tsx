@@ -917,14 +917,14 @@ export function PaymentSettingsSection({
             <div className='overflow-x-auto pb-1'>
               <TabsList className='grid min-w-[52rem] grid-cols-7'>
                 <TabsTrigger value='general'>{t('General')}</TabsTrigger>
-                <TabsTrigger value='epay'>Epay</TabsTrigger>
+                <TabsTrigger value='epay'>{t('Epay')}</TabsTrigger>
                 <TabsTrigger value='alipay-native'>
                   {t('Alipay')}
                 </TabsTrigger>
                 <TabsTrigger value='stripe'>{t('Stripe')}</TabsTrigger>
-                <TabsTrigger value='creem'>Creem</TabsTrigger>
-                <TabsTrigger value='waffo-pancake'>Waffo Pancake</TabsTrigger>
-                <TabsTrigger value='waffo'>Waffo</TabsTrigger>
+                <TabsTrigger value='creem'>{t('Creem')}</TabsTrigger>
+                <TabsTrigger value='waffo-pancake'>{t('Waffo Pancake')}</TabsTrigger>
+                <TabsTrigger value='waffo'>{t('Waffo')}</TabsTrigger>
               </TabsList>
             </div>
 
