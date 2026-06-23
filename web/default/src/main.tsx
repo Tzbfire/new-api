@@ -114,6 +114,16 @@ declare module '@tanstack/react-router' {
 
 // Render the app
 const rootElement = document.getElementById('root')!
+const markBootReady = () => {
+  try {
+    ;(
+      window as unknown as { __NEW_API_BOOT_READY__?: boolean }
+    ).__NEW_API_BOOT_READY__ = true
+    document.documentElement.setAttribute('data-new-api-boot', 'ready')
+  } catch {
+    /* empty */
+  }
+}
 // Set document.title and favicon from cached status, then refresh from network
 ;(function initSystemBranding() {
   try {
@@ -172,3 +182,4 @@ if (!rootElement.innerHTML) {
     </StrictMode>
   )
 }
+markBootReady()

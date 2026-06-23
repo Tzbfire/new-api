@@ -7,19 +7,19 @@ import { tanstackRouter } from '@tanstack/router-plugin/rspack'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const legacyBrowserTargets = [
-  'Chrome >= 87',
-  'Edge >= 88',
-  'Firefox >= 78',
-  'Safari >= 14',
-  'iOS >= 14',
+  // Keep optional chaining / nullish coalescing out of emitted syntax for
+  // older Chromium-shell desktop browsers, while still covering iOS Safari.
+  'Chrome >= 79',
+  'Edge >= 79',
+  'Firefox >= 72',
+  'Safari >= 13',
+  'iOS >= 13',
 ]
 
-// Rsbuild does not transpile node_modules by default. These packages are
-// loaded in the initial shell and currently publish modern syntax; include
-// them so the explicit legacy browser targets above are actually applied.
-const legacyTranspileDependencies = [
-  /node_modules[\\/](@base-ui|@radix-ui|@tanstack)[\\/]/,
-]
+// Rsbuild does not transpile node_modules by default. Some route/markdown/UI
+// dependencies still publish modern syntax; compile dependencies too so the
+// explicit legacy browser targets above are applied consistently.
+const legacyTranspileDependencies = [/node_modules[\\/]/]
 
 export default defineConfig(({ envMode }) => {
   const env = loadEnv({ mode: envMode, prefixes: ['VITE_'] })

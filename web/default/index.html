@@ -17,10 +17,26 @@
 
     <script>
       (function () {
+        var pendingMessages = []
+        var pendingTimer = null
+
+        function isBootReady() {
+          var root = document.getElementById('root')
+          return (
+            window.__NEW_API_BOOT_READY__ === true ||
+            document.documentElement.getAttribute('data-new-api-boot') ===
+              'ready' ||
+            (root && root.children && root.children.length > 0)
+          )
+        }
+
         function showBootError(message) {
+          if (isBootReady()) return
+
           try {
             var root = document.getElementById('root') || document.body
             var box = document.createElement('pre')
+            box.setAttribute('data-new-api-boot-error', 'true')
             box.style.cssText =
               'margin:16px;padding:12px;white-space:pre-wrap;border:1px solid #fca5a5;background:#fef2f2;color:#991b1b;border-radius:8px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;'
             box.textContent =
@@ -30,15 +46,25 @@
           } catch (_) {}
         }
 
+        function scheduleBootError(message) {
+          pendingMessages.push(String(message || 'unknown error'))
+          if (pendingTimer) return
+
+          pendingTimer = window.setTimeout(function () {
+            showBootError(pendingMessages.join('\n\n'))
+          }, 4000)
+        }
+
         window.addEventListener('error', function (event) {
-          showBootError(
+          scheduleBootError(
             (event && (event.message || event.filename)) || 'script error',
           )
         })
         window.addEventListener('unhandledrejection', function (event) {
-          showBootError(
-            (event && event.reason && (event.reason.stack || event.reason.message)) ||
-              (event && event.reason) ||
+          var reason = event && event.reason
+          scheduleBootError(
+            (reason && (reason.stack || reason.message)) ||
+              reason ||
               'unhandled rejection',
           )
         })
