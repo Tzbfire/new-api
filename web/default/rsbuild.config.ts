@@ -6,6 +6,21 @@ import { tanstackRouter } from '@tanstack/router-plugin/rspack'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+const legacyBrowserTargets = [
+  'Chrome >= 87',
+  'Edge >= 88',
+  'Firefox >= 78',
+  'Safari >= 14',
+  'iOS >= 14',
+]
+
+// Rsbuild does not transpile node_modules by default. These packages are
+// loaded in the initial shell and currently publish modern syntax; include
+// them so the explicit legacy browser targets above are actually applied.
+const legacyTranspileDependencies = [
+  /node_modules[\\/](@base-ui|@radix-ui|@tanstack)[\\/]/,
+]
+
 export default defineConfig(({ envMode }) => {
   const env = loadEnv({ mode: envMode, prefixes: ['VITE_'] })
   const serverUrl =
@@ -51,6 +66,7 @@ export default defineConfig(({ envMode }) => {
       },
     },
     source: {
+      include: legacyTranspileDependencies,
       entry: {
         index: './src/main.tsx',
       },
@@ -58,6 +74,10 @@ export default defineConfig(({ envMode }) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
+        'mdast-util-gfm-autolink-literal': path.resolve(
+          __dirname,
+          './src/lib/compat/mdast-util-gfm-autolink-literal.js',
+        ),
       },
     },
     html: {
@@ -76,13 +96,7 @@ export default defineConfig(({ envMode }) => {
       // Rsbuild 2's default browser baseline is intentionally modern; without
       // an explicit browserslist, iOS 16.x Safari can hit a blank screen when a
       // dependency leaves newer syntax/features in the initial chunks.
-      overrideBrowserslist: [
-        'Chrome >= 87',
-        'Edge >= 88',
-        'Firefox >= 78',
-        'Safari >= 14',
-        'iOS >= 14',
-      ],
+      overrideBrowserslist: legacyBrowserTargets,
       distPath: {
         root: 'dist',
       },
