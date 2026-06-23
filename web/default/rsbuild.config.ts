@@ -72,6 +72,17 @@ export default defineConfig(({ envMode }) => {
       // Production optimizations
       minify: isProd,
       target: 'web',
+      // Keep the default frontend compatible with older mobile WebKit.
+      // Rsbuild 2's default browser baseline is intentionally modern; without
+      // an explicit browserslist, iOS 16.x Safari can hit a blank screen when a
+      // dependency leaves newer syntax/features in the initial chunks.
+      overrideBrowserslist: [
+        'Chrome >= 87',
+        'Edge >= 88',
+        'Firefox >= 78',
+        'Safari >= 14',
+        'iOS >= 14',
+      ],
       distPath: {
         root: 'dist',
       },
