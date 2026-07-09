@@ -27,12 +27,13 @@ const (
 	QuotaBucketSourceRefund     = "refund"
 	QuotaBucketSourceLegacy     = "legacy"
 
-	QuotaBucketTxnTypeCredit     = "credit"
-	QuotaBucketTxnTypeMigration  = "migration"
-	QuotaBucketTxnTypePreConsume = "pre_consume"
-	QuotaBucketTxnTypeSettle     = "settle"
-	QuotaBucketTxnTypeRefund     = "refund"
-	QuotaBucketTxnTypeAdjust     = "adjust"
+	QuotaBucketTxnTypeCredit      = "credit"
+	QuotaBucketTxnTypeMigration   = "migration"
+	QuotaBucketTxnTypePreConsume  = "pre_consume"
+	QuotaBucketTxnTypeSettle      = "settle"
+	QuotaBucketTxnTypeRefund      = "refund"
+	QuotaBucketTxnTypeAdjust      = "adjust"
+	QuotaBucketTxnTypeSubPurchase = "subscription_purchase"
 )
 
 var ErrQuotaBucketInsufficient = errors.New("quota bucket balance insufficient")

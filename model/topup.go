@@ -27,6 +27,7 @@ type TopUp struct {
 const (
 	PaymentMethodStripe       = "stripe"
 	PaymentMethodCreem        = "creem"
+	PaymentMethodWallet       = "wallet"
 	PaymentMethodWaffo        = "waffo"
 	PaymentMethodWaffoPancake = "waffo_pancake"
 	PaymentMethodBalance      = "balance"

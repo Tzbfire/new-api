@@ -31,6 +31,15 @@ func insertQuotaBucketUser(t *testing.T, id int, quota int) {
 	}).Error)
 }
 
+func withQuotaPerUnit(t *testing.T, value float64) {
+	t.Helper()
+	oldQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = value
+	t.Cleanup(func() {
+		common.QuotaPerUnit = oldQuotaPerUnit
+	})
+}
+
 func getBucketBalanceForTest(t *testing.T, userId int, group string) int {
 	t.Helper()
 	balance, err := GetUserQuotaBucketBalance(userId, group)
@@ -73,4 +82,65 @@ func TestDebitUserQuotaBucketsUsesRequestedBillingGroup(t *testing.T) {
 	assert.Equal(t, 4, getBucketBalanceForTest(t, 302, GetPaidQuotaBillingGroup()))
 	assert.Equal(t, 30, getBucketBalanceForTest(t, 302, QuotaBucketBillingGroupDefault))
 	assert.Equal(t, 34, getUserQuotaForPaymentGuardTest(t, 302))
+}
+
+func TestPurchaseSubscriptionWithWalletUsesPaidBucketOnly(t *testing.T) {
+	truncateTables(t)
+	withQuotaBucketBilling(t)
+	withQuotaPerUnit(t, 1000)
+
+	insertQuotaBucketUser(t, 303, 1000)
+	require.NoError(t, CreditUserQuotaBucket(303, 5000, QuotaBucketSourceRedemption, "redeem-303", GetPaidQuotaBillingGroup()))
+	plan := &SubscriptionPlan{
+		Id:            303,
+		Title:         "Wallet Plan",
+		PriceAmount:   2,
+		Currency:      "USD",
+		DurationUnit:  SubscriptionDurationMonth,
+		DurationValue: 1,
+		Enabled:       true,
+		TotalAmount:   10000,
+	}
+	require.NoError(t, DB.Create(plan).Error)
+
+	result, err := PurchaseSubscriptionWithWallet(303, plan.Id)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 2000, result.ChargedQuota)
+	assert.Equal(t, 3000, getBucketBalanceForTest(t, 303, GetPaidQuotaBillingGroup()))
+	assert.Equal(t, 1000, getBucketBalanceForTest(t, 303, QuotaBucketBillingGroupDefault))
+	assert.Equal(t, 4000, getUserQuotaForPaymentGuardTest(t, 303))
+	assert.Equal(t, int64(1), countUserSubscriptionsForPaymentGuardTest(t, 303))
+
+	var order SubscriptionOrder
+	require.NoError(t, DB.Where("trade_no = ?", result.TradeNo).First(&order).Error)
+	assert.Equal(t, PaymentMethodWallet, order.PaymentMethod)
+	assert.Equal(t, common.TopUpStatusSuccess, order.Status)
+}
+
+func TestPurchaseSubscriptionWithWalletDoesNotFallbackToDefaultBucket(t *testing.T) {
+	truncateTables(t)
+	withQuotaBucketBilling(t)
+	withQuotaPerUnit(t, 1000)
+
+	insertQuotaBucketUser(t, 304, 1000)
+	require.NoError(t, CreditUserQuotaBucket(304, 500, QuotaBucketSourceRedemption, "redeem-304", GetPaidQuotaBillingGroup()))
+	plan := &SubscriptionPlan{
+		Id:            304,
+		Title:         "Wallet Plan",
+		PriceAmount:   1,
+		Currency:      "USD",
+		DurationUnit:  SubscriptionDurationMonth,
+		DurationValue: 1,
+		Enabled:       true,
+		TotalAmount:   10000,
+	}
+	require.NoError(t, DB.Create(plan).Error)
+
+	_, err := PurchaseSubscriptionWithWallet(304, plan.Id)
+	require.ErrorIs(t, err, ErrQuotaBucketInsufficient)
+	assert.Equal(t, 500, getBucketBalanceForTest(t, 304, GetPaidQuotaBillingGroup()))
+	assert.Equal(t, 1000, getBucketBalanceForTest(t, 304, QuotaBucketBillingGroupDefault))
+	assert.Equal(t, 1500, getUserQuotaForPaymentGuardTest(t, 304))
+	assert.Equal(t, int64(0), countUserSubscriptionsForPaymentGuardTest(t, 304))
 }
