@@ -287,6 +287,8 @@ func migrateDB() error {
 		&SubscriptionOrder{},
 		&UserSubscription{},
 		&SubscriptionPreConsumeRecord{},
+		&UserQuotaBucket{},
+		&UserQuotaBucketTransaction{},
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
 	)
@@ -338,6 +340,8 @@ func migrateDBFast() error {
 		{&SubscriptionOrder{}, "SubscriptionOrder"},
 		{&UserSubscription{}, "UserSubscription"},
 		{&SubscriptionPreConsumeRecord{}, "SubscriptionPreConsumeRecord"},
+		{&UserQuotaBucket{}, "UserQuotaBucket"},
+		{&UserQuotaBucketTransaction{}, "UserQuotaBucketTransaction"},
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
 	}

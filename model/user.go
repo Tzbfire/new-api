@@ -224,45 +224,45 @@ type UserSummary struct {
 }
 
 type UserBindingSummaryItem struct {
-	Key            string `json:"key"`
-	Label          string `json:"label"`
-	Value          string `json:"value"`
-	BindingType    string `json:"binding_type"`
-	ProviderId     *int   `json:"provider_id,omitempty"`
-	IsCustom       bool   `json:"is_custom"`
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Value       string `json:"value"`
+	BindingType string `json:"binding_type"`
+	ProviderId  *int   `json:"provider_id,omitempty"`
+	IsCustom    bool   `json:"is_custom"`
 }
 
 type UserReviewSummary struct {
-	User                *User                    `json:"user"`
-	Subscriptions       []SubscriptionSummary    `json:"subscriptions"`
-	Usage               map[string]interface{}   `json:"usage"`
-	Security            map[string]interface{}   `json:"security"`
-	Bindings            []UserBindingSummaryItem `json:"bindings"`
-	AvailableGroups     map[string]string        `json:"available_groups"`
-	HasSubscription     bool                     `json:"has_subscription"`
-	SubscriptionPlan    string                   `json:"subscription_plan"`
-	BillingPreference   string                   `json:"billing_preference"`
-	HasTwoFA            bool                     `json:"has_two_fa"`
-	HasPasskey          bool                     `json:"has_passkey"`
-	BindingCount        int                      `json:"binding_count"`
-	IsRecentlyActive    bool                     `json:"is_recently_active"`
-	LastActivityAt      int64                    `json:"last_activity_at"`
-	RecentlyActiveDays  int                      `json:"recently_active_days"`
+	User               *User                    `json:"user"`
+	Subscriptions      []SubscriptionSummary    `json:"subscriptions"`
+	Usage              map[string]interface{}   `json:"usage"`
+	Security           map[string]interface{}   `json:"security"`
+	Bindings           []UserBindingSummaryItem `json:"bindings"`
+	AvailableGroups    map[string]string        `json:"available_groups"`
+	HasSubscription    bool                     `json:"has_subscription"`
+	SubscriptionPlan   string                   `json:"subscription_plan"`
+	BillingPreference  string                   `json:"billing_preference"`
+	HasTwoFA           bool                     `json:"has_two_fa"`
+	HasPasskey         bool                     `json:"has_passkey"`
+	BindingCount       int                      `json:"binding_count"`
+	IsRecentlyActive   bool                     `json:"is_recently_active"`
+	LastActivityAt     int64                    `json:"last_activity_at"`
+	RecentlyActiveDays int                      `json:"recently_active_days"`
 }
 
 type AdminDashboardOverview struct {
-	TotalUsers          int64 `json:"total_users"`
-	EnabledUsers        int64 `json:"enabled_users"`
-	DisabledUsers       int64 `json:"disabled_users"`
-	DeletedUsers        int64 `json:"deleted_users"`
-	AdminUsers          int64 `json:"admin_users"`
-	TotalQuota          int64 `json:"total_quota"`
-	TotalUsedQuota      int64 `json:"total_used_quota"`
-	TotalRequestCount   int64 `json:"total_request_count"`
-	ActiveUsers24h      int64 `json:"active_users_24h"`
-	ActiveUsers7d       int64 `json:"active_users_7d"`
-	NewUsers24h         int64 `json:"new_users_24h"`
-	NewUsers7d          int64 `json:"new_users_7d"`
+	TotalUsers        int64 `json:"total_users"`
+	EnabledUsers      int64 `json:"enabled_users"`
+	DisabledUsers     int64 `json:"disabled_users"`
+	DeletedUsers      int64 `json:"deleted_users"`
+	AdminUsers        int64 `json:"admin_users"`
+	TotalQuota        int64 `json:"total_quota"`
+	TotalUsedQuota    int64 `json:"total_used_quota"`
+	TotalRequestCount int64 `json:"total_request_count"`
+	ActiveUsers24h    int64 `json:"active_users_24h"`
+	ActiveUsers7d     int64 `json:"active_users_7d"`
+	NewUsers24h       int64 `json:"new_users_24h"`
+	NewUsers7d        int64 `json:"new_users_7d"`
 }
 
 type AdminUserRankingItem struct {
@@ -599,7 +599,7 @@ func GetAdminDashboardOverview() (*AdminDashboardOverview, error) {
 
 func getAdminRankingQuery() *gorm.DB {
 	return DB.Model(&User{}).
-		Select("id, username, display_name, "+commonGroupCol+", request_count, used_quota, last_request_at").
+		Select("id, username, display_name, " + commonGroupCol + ", request_count, used_quota, last_request_at").
 		Where("deleted_at IS NULL")
 }
 
@@ -643,8 +643,8 @@ func GetUserReviewSummary(userId int) (*UserReviewSummary, error) {
 		availableGroups[groupName] = fmt.Sprintf("%.2f", ratio_setting.GetGroupRatio(groupName))
 	}
 	review := &UserReviewSummary{
-		User:              user,
-		Subscriptions:     subscriptions,
+		User:          user,
+		Subscriptions: subscriptions,
 		Usage: map[string]interface{}{
 			"request_count":   user.RequestCount,
 			"used_quota":      user.UsedQuota,
@@ -750,15 +750,30 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 
 	// 更新用户额度
 	user.AffQuota -= quota
-	user.Quota += quota
+	if IsQuotaBucketBillingEnabled() {
+		if err := tx.Model(&User{}).Where("id = ?", user.Id).Update("aff_quota", user.AffQuota).Error; err != nil {
+			return err
+		}
+		if err := creditUserQuotaBucketTx(tx, user.Id, quota, QuotaBucketSourceInvite, "", QuotaBucketBillingGroupDefault, true); err != nil {
+			return err
+		}
+	} else {
+		user.Quota += quota
 
-	// 保存用户状态
-	if err := tx.Save(user).Error; err != nil {
-		return err
+		// 保存用户状态
+		if err := tx.Save(user).Error; err != nil {
+			return err
+		}
 	}
 
 	// 提交事务
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	if IsQuotaBucketBillingEnabled() {
+		refreshUserQuotaCacheFromDB(user.Id, "invite quota transfer")
+	}
+	return nil
 }
 
 func (user *User) Insert(inviterId int) error {
@@ -1272,6 +1287,9 @@ func IncreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
+	if IsQuotaBucketBillingEnabled() {
+		return CreditUserQuotaBucket(id, quota, QuotaBucketSourceLegacy, "", QuotaBucketBillingGroupDefault)
+	}
 	gopool.Go(func() {
 		err := cacheIncrUserQuota(id, int64(quota))
 		if err != nil {
@@ -1296,6 +1314,10 @@ func increaseUserQuota(id int, quota int) (err error) {
 func DecreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
+	}
+	if IsQuotaBucketBillingEnabled() {
+		_, err := DebitUserQuotaAnyBuckets(id, quota, QuotaBucketChargeMeta{BillingGroup: QuotaBucketBillingGroupDefault}, QuotaBucketTxnTypeAdjust)
+		return err
 	}
 	gopool.Go(func() {
 		err := cacheDecrUserQuota(id, int64(quota))
@@ -1484,4 +1506,3 @@ func (user *User) FillUserByYaohuoId() error {
 	err := DB.Where("yaohuo_id = ?", user.YaohuoId).First(user).Error
 	return err
 }
-

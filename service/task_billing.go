@@ -89,6 +89,17 @@ func taskAdjustFunding(task *model.Task, delta int) error {
 	if taskIsSubscription(task) {
 		return model.PostConsumeUserSubscriptionDelta(task.PrivateData.SubscriptionId, int64(delta))
 	}
+	if model.IsQuotaBucketBillingEnabled() && task.PrivateData.RequestId != "" {
+		meta := model.QuotaBucketChargeMeta{
+			RequestID:    task.PrivateData.RequestId,
+			UsingGroup:   task.Group,
+			BillingGroup: task.PrivateData.BillingGroup,
+			ModelName:    taskModelName(task),
+			TokenId:      task.PrivateData.TokenId,
+			ChannelId:    task.ChannelId,
+		}
+		return model.SettleUserQuotaBuckets(task.UserId, meta, delta)
+	}
 	if delta > 0 {
 		return model.DecreaseUserQuota(task.UserId, delta, false)
 	}
@@ -119,6 +130,18 @@ func taskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
 // taskBillingOther 从 task 的 BillingContext 构建日志 Other 字段。
 func taskBillingOther(task *model.Task) map[string]interface{} {
 	other := make(map[string]interface{})
+	if task.PrivateData.BillingSource != "" {
+		other["billing_source"] = task.PrivateData.BillingSource
+	}
+	if task.PrivateData.BillingGroup != "" {
+		other["billing_group"] = task.PrivateData.BillingGroup
+	}
+	if task.PrivateData.RequestId != "" {
+		other["request_id"] = task.PrivateData.RequestId
+	}
+	if task.PrivateData.SubscriptionId > 0 {
+		other["subscription_id"] = task.PrivateData.SubscriptionId
+	}
 	if bc := task.PrivateData.BillingContext; bc != nil {
 		other["model_price"] = bc.ModelPrice
 		if bc.ModelRatio > 0 {
@@ -149,6 +172,8 @@ func taskModelName(task *model.Task) string {
 
 type consumeLogBillingOther struct {
 	BillingSource  string `json:"billing_source"`
+	BillingGroup   string `json:"billing_group"`
+	RequestId      string `json:"request_id"`
 	SubscriptionId int    `json:"subscription_id"`
 }
 
@@ -195,6 +220,12 @@ func BackfillTaskBillingFromConsumeLog(ctx context.Context, task *model.Task, re
 	}
 	if task.PrivateData.BillingSource == "" && other.BillingSource != "" {
 		task.PrivateData.BillingSource = other.BillingSource
+	}
+	if task.PrivateData.BillingGroup == "" && other.BillingGroup != "" {
+		task.PrivateData.BillingGroup = other.BillingGroup
+	}
+	if task.PrivateData.RequestId == "" && other.RequestId != "" {
+		task.PrivateData.RequestId = other.RequestId
 	}
 	if task.PrivateData.SubscriptionId == 0 && other.SubscriptionId > 0 {
 		task.PrivateData.SubscriptionId = other.SubscriptionId
