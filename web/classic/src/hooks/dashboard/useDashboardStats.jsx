@@ -43,28 +43,53 @@ export const useDashboardStats = (
   t,
 ) => {
   const groupedStatsData = useMemo(
-    () => [
+    () => {
+      const quotaBucketGroups = userState?.user?.quota_buckets?.enabled
+        ? userState?.user?.quota_buckets?.groups || []
+        : [];
+      const quotaBucketItems = quotaBucketGroups
+        .filter(
+          (bucket) =>
+            Number(bucket?.amount_remaining || 0) > 0 ||
+            Number(bucket?.amount_used || 0) > 0,
+        )
+        .map((bucket) => {
+          const group = bucket?.billing_group || '';
+          const isDefault = group.toLowerCase() === 'default';
+          return {
+            title: isDefault ? t('普通余额') : `${group}${t('余额')}`,
+            value: renderQuota(bucket?.amount_remaining || 0),
+            icon: <IconMoneyExchangeStroked />,
+            avatarColor: isDefault ? 'cyan' : 'orange',
+            trendData: [],
+            trendColor: isDefault ? '#06b6d4' : '#f97316',
+          };
+        });
+      const accountItems = [
+        {
+          title: t('当前余额'),
+          value: renderQuota(userState?.user?.quota),
+          icon: <IconMoneyExchangeStroked />,
+          avatarColor: 'blue',
+          trendData: [],
+          trendColor: '#3b82f6',
+        },
+        ...quotaBucketItems,
+        {
+          title: t('历史消耗'),
+          value: renderQuota(userState?.user?.used_quota),
+          icon: <IconHistogram />,
+          avatarColor: 'purple',
+          trendData: [],
+          trendColor: '#8b5cf6',
+        },
+      ];
+
+      return [
       {
         title: createSectionTitle(Wallet, t('账户数据')),
         color: 'bg-blue-50',
-        items: [
-          {
-            title: t('当前余额'),
-            value: renderQuota(userState?.user?.quota),
-            icon: <IconMoneyExchangeStroked />,
-            avatarColor: 'blue',
-            trendData: [],
-            trendColor: '#3b82f6',
-          },
-          {
-            title: t('历史消耗'),
-            value: renderQuota(userState?.user?.used_quota),
-            icon: <IconHistogram />,
-            avatarColor: 'purple',
-            trendData: [],
-            trendColor: '#8b5cf6',
-          },
-        ],
+        items: accountItems,
       },
       {
         title: createSectionTitle(Activity, t('使用统计')),
@@ -132,9 +157,11 @@ export const useDashboardStats = (
           },
         ],
       },
-    ],
+    ];
+    },
     [
       userState?.user?.quota,
+      userState?.user?.quota_buckets,
       userState?.user?.used_quota,
       userState?.user?.request_count,
       times,

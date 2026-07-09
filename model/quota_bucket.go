@@ -94,6 +94,14 @@ type QuotaBucketChargePlan struct {
 	Allocations  []QuotaBucketAllocation `json:"allocations"`
 }
 
+type UserQuotaBucketGroupSummary struct {
+	BillingGroup    string `json:"billing_group"`
+	AmountTotal     int64  `json:"amount_total"`
+	AmountRemaining int64  `json:"amount_remaining"`
+	AmountUsed      int64  `json:"amount_used"`
+	BucketCount     int64  `json:"bucket_count"`
+}
+
 func IsQuotaBucketBillingEnabled() bool {
 	return setting.QuotaBucketBillingEnabled
 }
@@ -228,6 +236,26 @@ func GetUserQuotaBucketBalance(userId int, billingGroup string) (int, error) {
 	err := activeQuotaBucketQuery(DB.Model(&UserQuotaBucket{}), userId, billingGroup).
 		Select("COALESCE(SUM(amount_remaining), 0)").Scan(&total).Error
 	return int(total), err
+}
+
+func GetUserQuotaBucketGroupSummaries(userId int) ([]UserQuotaBucketGroupSummary, error) {
+	if !IsQuotaBucketBillingEnabled() || userId <= 0 {
+		return []UserQuotaBucketGroupSummary{}, nil
+	}
+	if err := EnsureUserQuotaBucketsMigrated(userId); err != nil {
+		return nil, err
+	}
+	summaries := make([]UserQuotaBucketGroupSummary, 0)
+	err := DB.Model(&UserQuotaBucket{}).
+		Select("billing_group, COUNT(*) AS bucket_count, COALESCE(SUM(amount_total), 0) AS amount_total, COALESCE(SUM(amount_remaining), 0) AS amount_remaining, COALESCE(SUM(amount_used), 0) AS amount_used").
+		Where("user_id = ? AND status = ?", userId, QuotaBucketStatusActive).
+		Group("billing_group").
+		Order("billing_group ASC").
+		Scan(&summaries).Error
+	if err != nil {
+		return nil, err
+	}
+	return summaries, nil
 }
 
 func CreditUserQuotaBucket(userId int, quota int, source string, sourceID string, billingGroup string) error {
