@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -361,6 +362,10 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	}
 
 	pref := common.NormalizeBillingPreference(relayInfo.UserSetting.BillingPreference)
+	channelId := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+	if channelId == 0 && relayInfo.ChannelMeta != nil {
+		channelId = relayInfo.ChannelId
+	}
 
 	// 钱包路径需要先检查用户额度
 	tryWallet := func() (*BillingSession, *types.NewAPIError) {
@@ -403,7 +408,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 				usingGroup:   relayInfo.UsingGroup,
 				modelName:    relayInfo.OriginModelName,
 				tokenId:      relayInfo.TokenId,
-				channelId:    relayInfo.ChannelId,
+				channelId:    channelId,
 				forceDB:      c.GetBool(forceImmediateQuotaBillingKey),
 			},
 		}
