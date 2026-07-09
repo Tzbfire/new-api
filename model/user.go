@@ -468,15 +468,30 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 
 	// 更新用户额度
 	user.AffQuota -= quota
-	user.Quota += quota
+	if IsQuotaBucketBillingEnabled() {
+		if err := tx.Model(&User{}).Where("id = ?", user.Id).Update("aff_quota", user.AffQuota).Error; err != nil {
+			return err
+		}
+		if err := creditUserQuotaBucketTx(tx, user.Id, quota, QuotaBucketSourceInvite, "", QuotaBucketBillingGroupDefault, true); err != nil {
+			return err
+		}
+	} else {
+		user.Quota += quota
 
-	// 保存用户状态
-	if err := tx.Save(user).Error; err != nil {
-		return err
+		// 保存用户状态
+		if err := tx.Save(user).Error; err != nil {
+			return err
+		}
 	}
 
 	// 提交事务
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	if IsQuotaBucketBillingEnabled() {
+		refreshUserQuotaCacheFromDB(user.Id, "invite quota transfer")
+	}
+	return nil
 }
 
 func (user *User) prepareForInsert(tx *gorm.DB) error {
@@ -1054,6 +1069,9 @@ func IncreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
+	if IsQuotaBucketBillingEnabled() {
+		return CreditUserQuotaBucket(id, quota, QuotaBucketSourceLegacy, "", QuotaBucketBillingGroupDefault)
+	}
 	gopool.Go(func() {
 		err := cacheIncrUserQuota(id, int64(quota))
 		if err != nil {
@@ -1078,6 +1096,10 @@ func increaseUserQuota(id int, quota int) (err error) {
 func DecreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
+	}
+	if IsQuotaBucketBillingEnabled() {
+		_, err := DebitUserQuotaAnyBuckets(id, quota, QuotaBucketChargeMeta{BillingGroup: QuotaBucketBillingGroupDefault}, QuotaBucketTxnTypeAdjust)
+		return err
 	}
 	gopool.Go(func() {
 		err := cacheDecrUserQuota(id, int64(quota))
