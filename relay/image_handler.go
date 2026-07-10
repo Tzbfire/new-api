@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
@@ -19,6 +20,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+const imageStudioErrorResponseLimit = 1024 * 1024
 
 func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
@@ -98,12 +101,20 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	if resp != nil {
 		httpResp = resp.(*http.Response)
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
+		if c.GetBool(string(constant.ContextKeyImageStudioStrictB64)) && info.IsStream {
+			service.CloseResponseBodyGracefully(httpResp)
+			return types.NewError(fmt.Errorf("AI Studio does not accept streaming image responses"), types.ErrorCodeBadResponse)
+		}
 		if httpResp.StatusCode != http.StatusOK {
 			if httpResp.StatusCode == http.StatusCreated && info.ApiType == constant.APITypeReplicate {
 				// replicate channel returns 201 Created when using Prefer: wait, treat it as success.
 				httpResp.StatusCode = http.StatusOK
 			} else {
-				newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+				if c.GetBool(string(constant.ContextKeyImageStudioStrictB64)) {
+					newAPIError = service.RelayErrorHandlerWithLimit(c.Request.Context(), httpResp, false, imageStudioErrorResponseLimit)
+				} else {
+					newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+				}
 				// reset status code 重置状态码
 				service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 				return newAPIError
@@ -111,7 +122,22 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		}
 	}
 
-	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
+	releaseLegacySlot := func() {}
+	if c.GetBool(string(constant.ContextKeyImageStudioStrictB64)) {
+		streaming, ok := adaptor.(channel.ImageStudioStreamingAdaptor)
+		if !ok || !streaming.SupportsImageStudioStreaming() {
+			release, err := service.AcquireImageStudioLegacyResponseSlot(c.Request.Context())
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+			}
+			releaseLegacySlot = release
+		}
+	}
+	var usage any
+	func() {
+		defer releaseLegacySlot()
+		usage, newAPIError = adaptor.DoResponse(c, httpResp, info)
+	}()
 	if newAPIError != nil {
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)

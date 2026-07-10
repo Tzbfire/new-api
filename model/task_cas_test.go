@@ -36,6 +36,8 @@ func TestMain(m *testing.M) {
 
 	if err := db.AutoMigrate(
 		&Task{},
+		&ImageStudioAsset{},
+		&TaskBillingAdjustment{},
 		&User{},
 		&Token{},
 		&Log{},
@@ -64,6 +66,8 @@ func truncateTables(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
 		DB.Exec("DELETE FROM tasks")
+		DB.Exec("DELETE FROM image_studio_assets")
+		DB.Exec("DELETE FROM task_billing_adjustments")
 		DB.Exec("DELETE FROM users")
 		DB.Exec("DELETE FROM tokens")
 		DB.Exec("DELETE FROM logs")
@@ -200,6 +204,35 @@ func TestUpdateWithStatus_Lose(t *testing.T) {
 	var reloaded Task
 	require.NoError(t, DB.First(&reloaded, task.ID).Error)
 	assert.EqualValues(t, TaskStatusFailure, reloaded.Status) // unchanged
+}
+
+func TestUpdateBillingSnapshotOnlyTouchesBillingColumns(t *testing.T) {
+	truncateTables(t)
+	task := &Task{
+		TaskID:   "task_billing_snapshot",
+		Status:   TaskStatusInProgress,
+		Progress: "40%",
+		Data:     json.RawMessage(`{"keep":true}`),
+	}
+	insertTask(t, task)
+	task.Quota = 345
+	task.ChannelId = 12
+	task.Group = "vip"
+	task.Properties.OriginModelName = "gpt-image-1"
+	task.PrivateData.RequestId = "req_snapshot"
+	won, err := task.UpdateBillingSnapshot(TaskStatusInProgress)
+	require.NoError(t, err)
+	assert.True(t, won)
+
+	var reloaded Task
+	require.NoError(t, DB.First(&reloaded, task.ID).Error)
+	assert.Equal(t, 345, reloaded.Quota)
+	assert.Equal(t, 12, reloaded.ChannelId)
+	assert.Equal(t, "vip", reloaded.Group)
+	assert.Equal(t, "gpt-image-1", reloaded.Properties.OriginModelName)
+	assert.Equal(t, "req_snapshot", reloaded.PrivateData.RequestId)
+	assert.Equal(t, "40%", reloaded.Progress)
+	assert.JSONEq(t, `{"keep":true}`, string(reloaded.Data))
 }
 
 func TestUpdateWithStatus_ConcurrentWinner(t *testing.T) {

@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -40,6 +42,38 @@ func isPositiveOptionValue(value string) bool {
 	}
 	floatValue, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
 	return err == nil && floatValue > 0
+}
+
+func validateImageStudioBatchConcurrency(value string) error {
+	concurrency, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || concurrency < 1 || concurrency > imageStudioGlobalConcurrency {
+		return fmt.Errorf("AI 画室批次并发数必须是 1-%d 之间的整数", imageStudioGlobalConcurrency)
+	}
+	return nil
+}
+
+func validateImageStudioTaskTimeout(value string) error {
+	timeout, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || timeout < constant.ImageStudioMinTimeoutMinutes || timeout > constant.ImageStudioMaxTimeoutMinutes {
+		return fmt.Errorf(
+			"AI 画室任务超时必须是 %d-%d 分钟之间的整数",
+			constant.ImageStudioMinTimeoutMinutes,
+			constant.ImageStudioMaxTimeoutMinutes,
+		)
+	}
+	return nil
+}
+
+func validateImageStudioRetentionDays(value string) error {
+	days, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || days < constant.ImageStudioMinRetentionDays || days > constant.ImageStudioMaxRetentionDays {
+		return fmt.Errorf(
+			"AI 画室图片保留时间必须是 %d-%d 天之间的整数",
+			constant.ImageStudioMinRetentionDays,
+			constant.ImageStudioMaxRetentionDays,
+		)
+	}
+	return nil
 }
 
 func collectModelNamesFromOptionValue(raw string, modelNames map[string]struct{}) {
@@ -150,6 +184,38 @@ func UpdateOption(c *gin.Context) {
 		}
 	}
 	switch option.Key {
+	case "ImageStudioBatchConcurrency":
+		if err := validateImageStudioBatchConcurrency(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "ImageStudioTaskTimeoutMinutes":
+		if err := validateImageStudioTaskTimeout(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "ImageStudioRetentionDays":
+		if err := validateImageStudioRetentionDays(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "ImageStudioBaseURL":
+		normalized, err := service.NormalizeImageStudioBaseURL(option.Value.(string))
+		if err != nil {
+			common.ApiErrorMsg(c, "AI 画室图片 BaseURL 无效: "+err.Error())
+			return
+		}
+		option.Value = normalized
+	case "ImageStudioPromptPresets":
+		if _, err := parseImageStudioPromptPresets(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "ImageStudioSizePresets":
+		if _, err := parseImageStudioSizePresets(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
 	case "GitHubOAuthEnabled":
 		if option.Value == "true" && common.GitHubClientId == "" {
 			c.JSON(http.StatusOK, gin.H{

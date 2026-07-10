@@ -66,6 +66,9 @@ const (
 	// ContextKeyLanguage stores the user's language preference for i18n
 	ContextKeyLanguage ContextKey = "language"
 	ContextKeyIsStream ContextKey = "is_stream"
+	// ContextKeyImageStudioStrictB64 forbids provider adaptors from turning an
+	// upstream URL into Base64 on behalf of the browser Image Studio.
+	ContextKeyImageStudioStrictB64 ContextKey = "image_studio_strict_b64"
 
 	// ContextKeyAuditLogged marks that the current request has already recorded
 	// a manage/operation audit log inside the handler. When set, the admin-audit

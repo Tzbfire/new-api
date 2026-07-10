@@ -1,6 +1,8 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
 
@@ -32,6 +34,20 @@ func SetApiRouter(router *gin.Engine) {
 		//apiRouter.GET("/midjourney", controller.GetMidjourney)
 		apiRouter.GET("/home_page_content", controller.GetHomePageContent)
 		apiRouter.GET("/pricing", middleware.HeaderNavModuleAuth("pricing"), controller.GetPricing)
+		imageStudioAssetRoute := apiRouter.Group("/image-studio/assets")
+		imageStudioAssetRoute.Use(middleware.PublicAssetCORS())
+		{
+			imageStudioAssetRoute.GET("/:asset_id/:expires/:signature", controller.GetPublicImageStudioAsset)
+			imageStudioAssetRoute.HEAD("/:asset_id/:expires/:signature", controller.GetPublicImageStudioAsset)
+			imageStudioAssetRoute.GET("/:asset_id/:expires/:signature/download", controller.GetPublicImageStudioAsset)
+			imageStudioAssetRoute.HEAD("/:asset_id/:expires/:signature/download", controller.GetPublicImageStudioAsset)
+			imageStudioAssetRoute.OPTIONS("/:asset_id/:expires/:signature", func(c *gin.Context) {
+				c.Status(http.StatusNoContent)
+			})
+			imageStudioAssetRoute.OPTIONS("/:asset_id/:expires/:signature/download", func(c *gin.Context) {
+				c.Status(http.StatusNoContent)
+			})
+		}
 		perfMetricsRoute := apiRouter.Group("/perf-metrics")
 		perfMetricsRoute.Use(middleware.HeaderNavModulePublicOrUserAuth("pricing"))
 		{
@@ -326,6 +342,12 @@ func SetApiRouter(router *gin.Engine) {
 		taskRoute := apiRouter.Group("/task")
 		{
 			taskRoute.GET("/self", middleware.UserAuth(), controller.GetUserTask)
+			taskRoute.DELETE("/image-studio", middleware.UserAuth(), controller.DeleteUserImageStudioTasks)
+			taskRoute.GET("/image-studio/download", middleware.TokenOrUserAuth(), controller.DownloadImageStudioTaskImages)
+			// Native <img>/<a> requests cannot attach the dashboard's New-Api-User
+			// header, so content uses session-or-token auth and then enforces task
+			// ownership again inside the handler.
+			taskRoute.GET("/image-studio/:task_id/images/:index/content", middleware.TokenOrUserAuth(), controller.GetImageStudioTaskImage)
 			taskRoute.GET("/", middleware.AdminAuth(), controller.GetAllTask)
 		}
 

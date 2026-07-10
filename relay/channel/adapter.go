@@ -31,6 +31,12 @@ type Adaptor interface {
 	ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error)
 }
 
+// ImageStudioStreamingAdaptor marks adaptors whose image response handler can
+// stream Base64 output into the Studio sink without materializing it in RAM.
+type ImageStudioStreamingAdaptor interface {
+	SupportsImageStudioStreaming() bool
+}
+
 type TaskAdaptor interface {
 	Init(info *relaycommon.RelayInfo)
 

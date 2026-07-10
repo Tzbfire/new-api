@@ -160,6 +160,57 @@ func taskModelName(task *model.Task) string {
 	return task.Properties.OriginModelName
 }
 
+type consumeLogBillingOther struct {
+	BillingSource  string `json:"billing_source"`
+	SubscriptionId int    `json:"subscription_id"`
+}
+
+// BackfillTaskBillingFromConsumeLog closes the crash window between relay
+// billing and the local Image Studio task's final database update.
+func BackfillTaskBillingFromConsumeLog(ctx context.Context, task *model.Task, requestId string) bool {
+	requestId = strings.TrimSpace(requestId)
+	if task == nil || task.UserId == 0 || requestId == "" {
+		return false
+	}
+	logs, _, err := model.GetUserLogs(task.UserId, model.LogTypeConsume, 0, 0, "", "", 0, 1, "", requestId, "")
+	if err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("backfill task billing failed (task=%s, request_id=%s): %s", task.TaskID, requestId, err.Error()))
+		return false
+	}
+	if len(logs) == 0 {
+		return false
+	}
+	logEntry := logs[0]
+	if task.Quota == 0 && logEntry.Quota > 0 {
+		task.Quota = logEntry.Quota
+	}
+	if task.ChannelId == 0 {
+		task.ChannelId = logEntry.ChannelId
+	}
+	if task.Group == "" {
+		task.Group = logEntry.Group
+	}
+	if task.PrivateData.TokenId == 0 {
+		task.PrivateData.TokenId = logEntry.TokenId
+	}
+	if task.Properties.OriginModelName == "" {
+		task.Properties.OriginModelName = logEntry.ModelName
+	}
+	var other consumeLogBillingOther
+	if logEntry.Other != "" {
+		if err := common.UnmarshalJsonStr(logEntry.Other, &other); err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("backfill task billing metadata failed (task=%s): %s", task.TaskID, err.Error()))
+		}
+	}
+	if task.PrivateData.BillingSource == "" {
+		task.PrivateData.BillingSource = other.BillingSource
+	}
+	if task.PrivateData.SubscriptionId == 0 {
+		task.PrivateData.SubscriptionId = other.SubscriptionId
+	}
+	return true
+}
+
 // RefundTaskQuota 统一的任务失败退款逻辑。
 // 当异步任务失败时，将预扣的 quota 退还给用户（支持钱包和订阅），并退还令牌额度。
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
@@ -192,6 +243,45 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 		Group:     task.Group,
 		Other:     other,
 	})
+}
+
+// RefundImageStudioTaskQuotaOnce uses the primary-DB adjustment ledger so a
+// timeout sweeper and a late worker can safely race without double-refunding.
+func RefundImageStudioTaskQuotaOnce(ctx context.Context, task *model.Task, reason string) (bool, error) {
+	if task == nil || task.Quota < 0 {
+		return false, nil
+	}
+	subscriptionID := 0
+	if taskIsSubscription(task) {
+		subscriptionID = task.PrivateData.SubscriptionId
+	}
+	appliedDelta, err := model.ApplyTaskRefundTarget(task.TaskID, task.UserId, subscriptionID, task.Quota)
+	if err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("AI 画室退款失败 task %s: %s", task.TaskID, err.Error()))
+		return false, err
+	}
+	if appliedDelta == 0 {
+		return false, nil
+	}
+	if task.PrivateData.TokenId > 0 {
+		logger.LogWarn(ctx, fmt.Sprintf("AI 画室任务 %s 出现非零 token_id=%d，浏览器画室退款仅处理用户资金来源", task.TaskID, task.PrivateData.TokenId))
+	}
+	other := taskBillingOther(task)
+	other["task_id"] = task.TaskID
+	other["reason"] = reason
+	other["idempotency"] = model.TaskBillingAdjustmentRefund
+	other["refund_target"] = task.Quota
+	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
+		UserId:    task.UserId,
+		LogType:   model.LogTypeRefund,
+		ChannelId: task.ChannelId,
+		ModelName: taskModelName(task),
+		Quota:     appliedDelta,
+		TokenId:   task.PrivateData.TokenId,
+		Group:     task.Group,
+		Other:     other,
+	})
+	return true, nil
 }
 
 // RecalculateTaskQuota 通用的异步差额结算。

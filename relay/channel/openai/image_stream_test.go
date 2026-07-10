@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,23 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type imageStudioCaptureTestWriter struct {
+	gin.ResponseWriter
+	called bool
+}
+
+func (writer *imageStudioCaptureTestWriter) CaptureImageStudioResponse(_ *http.Response) ([]byte, error) {
+	writer.called = true
+	return []byte(`{"data":[{"storage_key":"local"}],"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}`), nil
+}
+
+type imageStudioFailOnRead struct{}
+
+func (imageStudioFailOnRead) Read([]byte) (int, error) {
+	return 0, errors.New("body must be consumed by capture sink")
+}
+func (imageStudioFailOnRead) Close() error { return nil }
 
 func newImageTestContext(t *testing.T, body, contentType string, isStream bool) (*gin.Context, *httptest.ResponseRecorder, *http.Response, *relaycommon.RelayInfo) {
 	t.Helper()
@@ -132,6 +150,25 @@ func TestOpenaiImageHandlersReturnJSONError(t *testing.T) {
 		require.Equal(t, "content moderation failed", err.ToOpenAIError().Message)
 		require.Empty(t, recorder.Body.String())
 	})
+}
+
+func TestOpenaiImageHandlerUsesStudioStreamingCapture(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	writer := &imageStudioCaptureTestWriter{ResponseWriter: context.Writer}
+	context.Writer = writer
+	context.Set(string(constant.ContextKeyImageStudioStrictB64), true)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       imageStudioFailOnRead{},
+	}
+	usage, relayErr := OpenaiImageHandler(context, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}, response)
+	require.Nil(t, relayErr)
+	require.True(t, writer.called)
+	require.Equal(t, 3, usage.PromptTokens)
+	require.Equal(t, 4, usage.CompletionTokens)
+	require.Equal(t, 7, usage.TotalTokens)
 }
 
 // TestOpenaiImageStreamHandlerRecordsUpstreamErrorEvent verifies that an error

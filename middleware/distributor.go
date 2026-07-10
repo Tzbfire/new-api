@@ -83,20 +83,13 @@ func Distribute() func(c *gin.Context) {
 				}
 				var selectGroup string
 				usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
-				// check path is /pg/chat/completions
-				if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
-					playgroundRequest := &dto.PlayGroundRequest{}
-					err = common.UnmarshalBodyReusable(c, playgroundRequest)
-					if err != nil {
-						abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidPlayground, map[string]any{"Error": err.Error()}))
-						return
-					}
-					if playgroundRequest.Group != "" {
-						if !service.GroupInUserUsableGroups(usingGroup, playgroundRequest.Group) && playgroundRequest.Group != usingGroup {
+				if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") || strings.HasPrefix(c.Request.URL.Path, "/pg/image-studio/") {
+					if modelRequest.Group != "" {
+						if !service.GroupInUserUsableGroups(usingGroup, modelRequest.Group) && modelRequest.Group != usingGroup {
 							abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
 							return
 						}
-						usingGroup = playgroundRequest.Group
+						usingGroup = modelRequest.Group
 						common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
 					}
 				}
@@ -105,7 +98,7 @@ func Distribute() func(c *gin.Context) {
 					affinityUsable := false
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-						channelSupportsRequestPath(preferred, c.Request.URL.Path) {
+						channelSupportsRequestPath(preferred, relayconstant.NormalizeRequestPath(c.Request.URL.Path)) {
 						if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
@@ -136,7 +129,7 @@ func Distribute() func(c *gin.Context) {
 						Ctx:         c,
 						ModelName:   modelRequest.Model,
 						TokenGroup:  usingGroup,
-						RequestPath: c.Request.URL.Path,
+						RequestPath: relayconstant.NormalizeRequestPath(c.Request.URL.Path),
 						Retry:       common.GetPointer(0),
 					})
 					if err != nil {
@@ -349,6 +342,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			return nil, false, err
 		}
 		modelRequest.Model = req.Model
+		modelRequest.Group = req.Group
 	}
 	if strings.HasPrefix(c.Request.URL.Path, "/v1/realtime") {
 		//wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01
@@ -364,9 +358,13 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			modelRequest.Model = c.Param("model")
 		}
 	}
-	if strings.HasPrefix(c.Request.URL.Path, "/v1/images/generations") {
+	normalizedPath := relayconstant.NormalizeRequestPath(c.Request.URL.Path)
+	if strings.HasPrefix(normalizedPath, "/v1/images/generations") {
 		modelRequest.Model = common.GetStringIfEmpty(modelRequest.Model, "dall-e")
-	} else if strings.HasPrefix(c.Request.URL.Path, "/v1/images/edits") {
+		if strings.HasPrefix(c.Request.URL.Path, "/pg/") {
+			c.Set("relay_mode", relayconstant.RelayModeImagesGenerations)
+		}
+	} else if strings.HasPrefix(normalizedPath, "/v1/images/edits") {
 		//modelRequest.Model = common.GetStringIfEmpty(c.PostForm("model"), "gpt-image-1")
 		contentType := c.ContentType()
 		if slices.Contains([]string{gin.MIMEPOSTForm, gin.MIMEMultipartPOSTForm}, contentType) {
@@ -374,6 +372,12 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			if err == nil && req.Model != "" {
 				modelRequest.Model = req.Model
 			}
+			if err == nil && req.Group != "" {
+				modelRequest.Group = req.Group
+			}
+		}
+		if strings.HasPrefix(c.Request.URL.Path, "/pg/") {
+			c.Set("relay_mode", relayconstant.RelayModeImagesEdits)
 		}
 	}
 	if strings.HasPrefix(c.Request.URL.Path, "/v1/audio") {

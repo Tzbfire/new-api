@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -51,6 +52,20 @@ func InitOptionMap() {
 	common.OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(common.DisplayInCurrencyEnabled)
 	common.OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(common.DisplayTokenStatEnabled)
 	common.OptionMap["DrawingEnabled"] = strconv.FormatBool(common.DrawingEnabled)
+	common.OptionMap["ImageStudioBatchConcurrency"] = strconv.Itoa(constant.ImageStudioDefaultBatchConcurrency)
+	legacyImageStudioTimeout := common.GetEnvOrDefault("IMAGE_STUDIO_TASK_TIMEOUT_MINUTES", constant.ImageStudioDefaultTimeoutMinutes)
+	if legacyImageStudioTimeout < constant.ImageStudioMinTimeoutMinutes || legacyImageStudioTimeout > constant.ImageStudioMaxTimeoutMinutes {
+		legacyImageStudioTimeout = constant.ImageStudioDefaultTimeoutMinutes
+	}
+	common.OptionMap["ImageStudioTaskTimeoutMinutes"] = strconv.Itoa(legacyImageStudioTimeout)
+	legacyImageStudioRetention := common.GetEnvOrDefault("IMAGE_STUDIO_RETENTION_DAYS", constant.ImageStudioDefaultRetentionDays)
+	if legacyImageStudioRetention < constant.ImageStudioMinRetentionDays || legacyImageStudioRetention > constant.ImageStudioMaxRetentionDays {
+		legacyImageStudioRetention = constant.ImageStudioDefaultRetentionDays
+	}
+	common.OptionMap["ImageStudioRetentionDays"] = strconv.Itoa(legacyImageStudioRetention)
+	common.OptionMap["ImageStudioBaseURL"] = ""
+	common.OptionMap["ImageStudioPromptPresets"] = constant.ImageStudioDefaultPromptPresets
+	common.OptionMap["ImageStudioSizePresets"] = constant.ImageStudioDefaultSizePresets
 	common.OptionMap["TaskEnabled"] = strconv.FormatBool(common.TaskEnabled)
 	common.OptionMap["DataExportEnabled"] = strconv.FormatBool(common.DataExportEnabled)
 	common.OptionMap["ChannelDisableThreshold"] = strconv.FormatFloat(common.ChannelDisableThreshold, 'f', -1, 64)
@@ -210,12 +225,16 @@ func UpdateOption(key string, value string) error {
 		Key: key,
 	}
 	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
+	if err := DB.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+		return err
+	}
 	option.Value = value
 	// Save is a combination function.
 	// If save value does not contain primary key, it will execute Create,
 	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
+	if err := DB.Save(&option).Error; err != nil {
+		return err
+	}
 	// Update OptionMap
 	return updateOptionMap(key, value)
 }

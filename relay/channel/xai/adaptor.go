@@ -21,6 +21,8 @@ import (
 type Adaptor struct {
 }
 
+func (a *Adaptor) SupportsImageStudioStreaming() bool { return true }
+
 func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {
 	//TODO implement me
 	return nil, errors.New("not implemented")

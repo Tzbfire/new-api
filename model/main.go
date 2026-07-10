@@ -17,6 +17,7 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var commonGroupCol string
@@ -282,6 +283,8 @@ func migrateDB() error {
 		&TopUp{},
 		&QuotaData{},
 		&Task{},
+		&ImageStudioAsset{},
+		&TaskBillingAdjustment{},
 		&Model{},
 		&Vendor{},
 		&PrefillGroup{},
@@ -313,7 +316,10 @@ func migrateDB() error {
 			return err
 		}
 	}
-	return migrateGroupSubscriptionSnapshots(groupSubscriptionState)
+	if err := migrateGroupSubscriptionSnapshots(groupSubscriptionState); err != nil {
+		return err
+	}
+	return migrateImageStudioRefundLedger()
 }
 
 func migrateDBFast() error {
@@ -337,6 +343,8 @@ func migrateDBFast() error {
 		{&TopUp{}, "TopUp"},
 		{&QuotaData{}, "QuotaData"},
 		{&Task{}, "Task"},
+		{&ImageStudioAsset{}, "ImageStudioAsset"},
+		{&TaskBillingAdjustment{}, "TaskBillingAdjustment"},
 		{&Model{}, "Model"},
 		{&Vendor{}, "Vendor"},
 		{&PrefillGroup{}, "PrefillGroup"},
@@ -387,6 +395,9 @@ func migrateDBFast() error {
 		}
 	}
 	if err := migrateGroupSubscriptionSnapshots(groupSubscriptionState); err != nil {
+		return err
+	}
+	if err := migrateImageStudioRefundLedger(); err != nil {
 		return err
 	}
 	common.SysLog("database migrated")
@@ -587,6 +598,51 @@ func migrateGroupSubscriptionSnapshots(state groupSubscriptionMigrationState) er
 			}
 		}
 		return tx.Create(&Option{Key: markerKey, Value: "done"}).Error
+	})
+}
+
+// migrateImageStudioRefundLedger establishes the idempotency baseline before
+// the recovery worker starts. Older Studio versions refunded failed tasks
+// directly but kept their billed quota on the task; recording that historical
+// target without changing balances prevents the new worker refunding them a
+// second time. The marker row also serializes concurrent instance startups.
+func migrateImageStudioRefundLedger() error {
+	const markerKey = "MigrationImageStudioRefundLedgerV1"
+	if DB == nil || !DB.Migrator().HasTable(&Option{}) || !DB.Migrator().HasTable(&TaskBillingAdjustment{}) {
+		return nil
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		marker := &Option{Key: markerKey, Value: "pending"}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(marker).Error; err != nil {
+			return err
+		}
+		if err := lockForUpdate(tx).Where("key = ?", markerKey).First(marker).Error; err != nil {
+			return err
+		}
+		if marker.Value == "done" {
+			return nil
+		}
+
+		var tasks []Task
+		if err := tx.Where("platform = ? AND status = ? AND quota > 0", constant.TaskPlatformImageStudio, TaskStatusFailure).
+			Find(&tasks).Error; err != nil {
+			return err
+		}
+		for index := range tasks {
+			task := &tasks[index]
+			adjustment := &TaskBillingAdjustment{
+				TaskID:         task.TaskID,
+				Kind:           TaskBillingAdjustmentRefund,
+				UserID:         task.UserId,
+				SubscriptionID: task.PrivateData.SubscriptionId,
+				Quota:          task.Quota,
+				CreatedAt:      time.Now().Unix(),
+			}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(adjustment).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Model(marker).Update("value", "done").Error
 	})
 }
 

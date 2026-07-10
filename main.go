@@ -125,6 +125,13 @@ func main() {
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
 
+	// Image Studio stores generated assets outside the database. The optional
+	// retention policy is enforced by the master node only.
+	service.StartImageStudioLegacyAssetMigration()
+	service.StartImageStudioAssetCleanupTask()
+	service.StartImageStudioRecoveryTask()
+	controller.StartImageStudioWorker()
+
 	// Report this process as a system instance so the System Info page can show
 	// all currently alive nodes in multi-instance deployments.
 	service.StartSystemInstanceReporter()
@@ -230,13 +237,16 @@ func main() {
 	sig := <-quit
 	common.SysLog(fmt.Sprintf("received signal: %v, shutting down...", sig))
 
-	// SSE streams may run for minutes; give them time to finish before forced exit
+	// Stop enqueue/claim first so background studio work is bounded, then drain
+	// in-flight HTTP handlers (SSE may run for minutes) and studio workers.
 	shutdownTimeout := time.Duration(common.GetEnvOrDefault("SHUTDOWN_TIMEOUT_SECONDS", 120)) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	controller.BeginImageStudioShutdown()
 	if err := srv.Shutdown(ctx); err != nil {
 		common.SysError(fmt.Sprintf("server forced to shutdown: %v", err))
 	}
+	controller.WaitImageStudioInFlight(ctx)
 	// 内存中的看板数据保存入库，避免重启丢失未落库数据 (issue #5679)
 	if common.DataExportEnabled {
 		model.SaveQuotaDataCache()

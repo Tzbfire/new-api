@@ -1092,6 +1092,32 @@ func DecreaseUserQuota(id int, quota int, db bool) (err error) {
 	return decreaseUserQuota(id, quota)
 }
 
+// DecreaseUserQuotaIfEnough atomically protects durable asynchronous requests
+// from concurrent pre-consumption driving a wallet below zero.
+func DecreaseUserQuotaIfEnough(id int, quota int) error {
+	if quota < 0 {
+		return errors.New("quota 不能为负数！")
+	}
+	if quota == 0 {
+		return nil
+	}
+	result := DB.Model(&User{}).
+		Where("id = ? AND quota >= ?", id, quota).
+		Update("quota", gorm.Expr("quota - ?", quota))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrInsufficientUserQuota
+	}
+	gopool.Go(func() {
+		if err := cacheDecrUserQuota(id, int64(quota)); err != nil {
+			common.SysLog("failed to decrease user quota cache: " + err.Error())
+		}
+	})
+	return nil
+}
+
 func decreaseUserQuota(id int, quota int) (err error) {
 	err = DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota - ?", quota)).Error
 	if err != nil {

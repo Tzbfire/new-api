@@ -84,13 +84,29 @@ func ClaudeErrorWrapperLocal(err error, code string, statusCode int) *dto.Claude
 }
 
 func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFail bool) (newApiErr *types.NewAPIError) {
-	newApiErr = types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
+	return relayErrorHandler(ctx, resp, showBodyWhenFail, 0)
+}
 
-	responseBody, err := io.ReadAll(resp.Body)
+func RelayErrorHandlerWithLimit(ctx context.Context, resp *http.Response, showBodyWhenFail bool, maxBytes int64) (newApiErr *types.NewAPIError) {
+	return relayErrorHandler(ctx, resp, showBodyWhenFail, maxBytes)
+}
+
+func relayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFail bool, maxBytes int64) (newApiErr *types.NewAPIError) {
+	newApiErr = types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
+	defer CloseResponseBodyGracefully(resp)
+
+	reader := io.Reader(resp.Body)
+	if maxBytes > 0 {
+		reader = io.LimitReader(resp.Body, maxBytes+1)
+	}
+	responseBody, err := io.ReadAll(reader)
 	if err != nil {
 		return
 	}
-	CloseResponseBodyGracefully(resp)
+	if maxBytes > 0 && int64(len(responseBody)) > maxBytes {
+		newApiErr.Err = fmt.Errorf("bad response status code %d, body exceeds %d bytes", resp.StatusCode, maxBytes)
+		return
+	}
 	var errResponse dto.GeneralErrorResponse
 	responseBodyText := string(responseBody)
 	responseBodyPreview := common.LocalLogPreview(responseBodyText)

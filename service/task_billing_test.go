@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -13,12 +15,41 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+type billingObserverTestSession struct {
+	settleErr error
+	preQuota  int
+}
+
+func (session *billingObserverTestSession) Settle(int) error         { return session.settleErr }
+func (session *billingObserverTestSession) Refund(*gin.Context)      {}
+func (session *billingObserverTestSession) NeedsRefund() bool        { return false }
+func (session *billingObserverTestSession) GetPreConsumedQuota() int { return session.preQuota }
+func (session *billingObserverTestSession) Reserve(int) error        { return nil }
+
+func TestSettleBillingOnlyNotifiesObserverAfterSuccessfulSettlement(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	notifications := 0
+	SetBillingSettlementObserver(ctx, func(_ *relaycommon.RelayInfo, _ int) {
+		notifications++
+	})
+	info := &relaycommon.RelayInfo{Billing: &billingObserverTestSession{settleErr: errors.New("settlement failed"), preQuota: 100}}
+
+	require.Error(t, SettleBilling(ctx, info, 0))
+	assert.Zero(t, notifications)
+
+	info.Billing = &billingObserverTestSession{preQuota: 100}
+	require.NoError(t, SettleBilling(ctx, info, 0))
+	assert.Equal(t, 1, notifications)
+}
 
 func TestMain(m *testing.M) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -41,6 +72,8 @@ func TestMain(m *testing.M) {
 
 	if err := db.AutoMigrate(
 		&model.Task{},
+		&model.ImageStudioAsset{},
+		&model.TaskBillingAdjustment{},
 		&model.User{},
 		&model.Token{},
 		&model.Log{},
@@ -64,6 +97,8 @@ func truncate(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
 		model.DB.Exec("DELETE FROM tasks")
+		model.DB.Exec("DELETE FROM image_studio_assets")
+		model.DB.Exec("DELETE FROM task_billing_adjustments")
 		model.DB.Exec("DELETE FROM users")
 		model.DB.Exec("DELETE FROM tokens")
 		model.DB.Exec("DELETE FROM logs")
@@ -390,6 +425,35 @@ func TestRefundTaskQuota_NoToken(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
+}
+
+func TestBackfillTaskBillingFromConsumeLog(t *testing.T) {
+	truncate(t)
+	const userID = 905
+	seedUser(t, userID, 1000)
+	logEntry := &model.Log{
+		UserId:    userID,
+		CreatedAt: time.Now().Unix(),
+		Type:      model.LogTypeConsume,
+		ModelName: "gpt-image-1",
+		Quota:     321,
+		ChannelId: 17,
+		TokenId:   23,
+		Group:     "vip",
+		RequestId: "req_image_studio_backfill",
+		Other:     `{"billing_source":"subscription","subscription_id":29}`,
+	}
+	require.NoError(t, model.LOG_DB.Create(logEntry).Error)
+
+	task := &model.Task{TaskID: "task_image_backfill", UserId: userID}
+	assert.True(t, BackfillTaskBillingFromConsumeLog(context.Background(), task, logEntry.RequestId))
+	assert.Equal(t, 321, task.Quota)
+	assert.Equal(t, 17, task.ChannelId)
+	assert.Equal(t, 23, task.PrivateData.TokenId)
+	assert.Equal(t, "vip", task.Group)
+	assert.Equal(t, "gpt-image-1", task.Properties.OriginModelName)
+	assert.Equal(t, BillingSourceSubscription, task.PrivateData.BillingSource)
+	assert.Equal(t, 29, task.PrivateData.SubscriptionId)
 }
 
 // ===========================================================================
@@ -816,4 +880,26 @@ func TestSettle_NonPerCallBilling_AppliesAdaptorAdjustment(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
+}
+
+func TestAdoptImageStudioPreheldBillingDoesNotDoubleDebit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	truncate(t)
+	const userID = 920
+	seedUser(t, userID, 1000)
+
+	// Mirror submit-time wallet hold.
+	require.NoError(t, model.DecreaseUserQuotaIfEnough(userID, 200))
+	assert.Equal(t, 800, getUserQuota(t, userID))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	SetImageStudioPreheldQuota(ctx, 200)
+	info := &relaycommon.RelayInfo{UserId: userID, RequestId: "req_preheld", IsPlayground: true}
+	require.Nil(t, PreConsumeBilling(ctx, 999, info))
+	require.NotNil(t, info.Billing)
+	assert.Equal(t, 200, info.Billing.GetPreConsumedQuota())
+	assert.Equal(t, 800, getUserQuota(t, userID), "preheld path must not debit again")
+
+	require.NoError(t, SettleBilling(ctx, info, 150))
+	assert.Equal(t, 850, getUserQuota(t, userID), "settle returns unused hold so net charge is actual")
 }

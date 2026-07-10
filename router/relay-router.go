@@ -62,9 +62,16 @@ func SetRelayRouter(router *gin.Engine) {
 	playgroundRouter := router.Group("/pg")
 	playgroundRouter.Use(middleware.RouteTag("relay"))
 	playgroundRouter.Use(middleware.SystemPerformanceCheck())
-	playgroundRouter.Use(middleware.UserAuth(), middleware.Distribute())
+	playgroundRouter.Use(middleware.UserAuth())
 	{
-		playgroundRouter.POST("/chat/completions", controller.Playground)
+		playgroundRouter.POST("/chat/completions", middleware.Distribute(), controller.Playground)
+		imageStudioRouter := playgroundRouter.Group("/image-studio")
+		{
+			imageStudioRouter.GET("/config", controller.GetImageStudioConfig)
+			imageStudioRouter.POST("/estimate", middleware.ImageStudioEstimateRateLimit(), middleware.Distribute(), controller.EstimateImageStudioCost)
+			imageStudioRouter.POST("/generations", controller.ImageStudioRequestBudget(), middleware.ImageStudioSubmitRateLimit(), middleware.Distribute(), controller.CreateImageStudioTask)
+			imageStudioRouter.POST("/edits", controller.ImageStudioRequestBudget(), middleware.ImageStudioSubmitRateLimit(), middleware.Distribute(), controller.CreateImageStudioTask)
+		}
 	}
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))

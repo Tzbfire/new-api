@@ -180,6 +180,12 @@ export type ContentSettings = {
   DataExportInterval: number
   Chats: string
   DrawingEnabled: boolean
+  ImageStudioBatchConcurrency: number
+  ImageStudioTaskTimeoutMinutes: number
+  ImageStudioRetentionDays: number
+  ImageStudioBaseURL: string
+  ImageStudioPromptPresets: string
+  ImageStudioSizePresets: string
   MjNotifyEnabled: boolean
   MjAccountFilterEnabled: boolean
   MjForwardUrlEnabled: boolean
