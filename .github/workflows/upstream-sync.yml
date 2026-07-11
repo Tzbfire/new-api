@@ -1,0 +1,67 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'manyou116/new-api' && vars.FORK_UPSTREAM_SYNC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require sync token
+        env:
+          FORK_SYNC_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+        run: |
+          if [ -z "$FORK_SYNC_TOKEN" ]; then
+            echo '::error::FORK_SYNC_TOKEN is required; see docs/FORK_MAINTENANCE.md'
+            exit 1
+          fi
+
+      - name: Check out fork main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ secrets.FORK_SYNC_TOKEN }}
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/QuantumNous/new-api.git
+          git fetch --prune upstream main
+          git fetch --prune origin main upstream-sync || true
+
+      - name: Update mirror branch
+        run: git push origin upstream/main:refs/heads/upstream-sync
+
+      - name: Detect upstream changes
+        id: changes
+        run: |
+          git fetch origin main upstream-sync
+          count=$(git rev-list --count origin/main..origin/upstream-sync)
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Upstream commits not merged into main: $count"
+
+      - name: Create synchronization pull request
+        if: steps.changes.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+        run: |
+          existing=$(gh pr list --base main --head upstream-sync --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Synchronization PR #$existing is already open"
+            exit 0
+          fi
+          gh pr create \
+            --base main \
+            --head upstream-sync \
+            --title 'chore: sync QuantumNous/new-api upstream' \
+            --body $'Automated upstream synchronization.\n\nMerge only after Fork CI passes and conflicts have been reviewed.'
