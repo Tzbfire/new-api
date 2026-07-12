@@ -23,7 +23,7 @@ env:
 
 jobs:
   verify:
-    if: github.repository == 'manyou116/new-api'
+    if: github.repository == 'manyou116/new-api' || github.repository == 'Tzbfire/new-api'
     runs-on: ubuntu-latest
     steps:
       - name: Check out
