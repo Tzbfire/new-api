@@ -54,7 +54,7 @@ func quotaBucketBillingAppliesToWallet(info *relaycommon.RelayInfo) bool {
 	case "subscription_first", "":
 		fallthrough
 	default:
-		hasSub, err := model.HasActiveUserSubscription(info.UserId)
+		hasSub, err := model.HasActiveUserSubscriptionForGroup(info.UserId, info.UsingGroup)
 		if err != nil {
 			common.SysLog("failed to check active subscription for quota bucket billing: " + err.Error())
 			return false
@@ -70,7 +70,7 @@ func prepareQuotaBucketBillingGroup(ctx *gin.Context, info *relaycommon.RelayInf
 	paidGroup := model.GetPaidQuotaBillingGroup()
 	balance, err := model.GetUserQuotaBucketBalance(info.UserId, paidGroup)
 	if err != nil {
-		logger.LogWarn(ctx, "quota bucket billing balance check failed: %s", err.Error())
+		logger.LogWarn(ctx, fmt.Sprintf("quota bucket billing balance check failed: %s", err.Error()))
 		return
 	}
 	if balance > 0 {
@@ -88,18 +88,17 @@ func fallbackQuotaBucketBillingGroup(ctx *gin.Context, info *relaycommon.RelayIn
 	}
 	balance, err := model.GetUserQuotaBucketBalance(info.UserId, paidGroup)
 	if err != nil {
-		logger.LogWarn(ctx, "quota bucket billing fallback balance check failed: %s", err.Error())
+		logger.LogWarn(ctx, fmt.Sprintf("quota bucket billing fallback balance check failed: %s", err.Error()))
 		return false
 	}
 	if balance >= quota {
 		return false
 	}
-	logger.LogInfo(ctx, "用户 %d 的 %s 余额桶不足，回退普通余额桶计费（付费桶余额: %s，需要: %s）",
-		info.UserId, paidGroup, logger.FormatQuota(balance), logger.FormatQuota(quota))
+	logger.LogInfo(ctx, fmt.Sprintf("用户 %d 的 %s 余额桶不足，回退普通余额桶计费（付费桶余额: %s，需要: %s）",
+		info.UserId, paidGroup, logger.FormatQuota(balance), logger.FormatQuota(quota)))
 	info.BillingGroup = ""
 	return true
 }
-
 
 // HandleGroupRatio checks for "auto_group" in the context and updates the group ratio and relayInfo.UsingGroup if present
 func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.GroupRatioInfo {

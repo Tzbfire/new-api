@@ -181,8 +181,6 @@ func Redeem(key string, userId int) (quota int, err error) {
 			err = tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
 		}
 		return err
-
-		}
 	})
 	if err != nil {
 		common.SysError("redemption failed: " + err.Error())
