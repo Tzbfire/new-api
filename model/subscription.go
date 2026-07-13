@@ -942,6 +942,10 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 	if userId <= 0 || planId <= 0 {
 		return errors.New("invalid userId or planId")
 	}
+	if IsQuotaBucketBillingEnabled() {
+		_, err := PurchaseSubscriptionWithWallet(userId, planId)
+		return err
+	}
 
 	var logPlanTitle string
 	var logMoney float64
