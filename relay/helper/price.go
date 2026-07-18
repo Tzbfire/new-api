@@ -399,6 +399,28 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		}
 	}
 
+	if fallbackQuotaBucketBillingGroup(c, info, preConsumedQuota) {
+		groupRatioInfo = HandleGroupRatio(c, info)
+		if meta.MaxTokens == 0 && groupRatioInfo.GroupRatio == 0 {
+			estimatedCompletionTokens = 0
+		}
+		rawCost, trace, err = billingexpr.RunExprWithRequest(exprStr, billingexpr.TokenParams{
+			P:   float64(promptTokens),
+			C:   float64(estimatedCompletionTokens),
+			Len: float64(promptTokens),
+		}, requestInput)
+		if err != nil {
+			return types.PriceData{}, fmt.Errorf("model %s tiered expr run failed after quota bucket fallback: %w", info.OriginModelName, err)
+		}
+		quotaBeforeGroup = rawCost / 1_000_000 * common.QuotaPerUnit
+		preConsumedQuota = billingexpr.QuotaRound(quotaBeforeGroup * groupRatioInfo.GroupRatio)
+		freeModel = false
+		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && groupRatioInfo.GroupRatio == 0 {
+			preConsumedQuota = 0
+			freeModel = true
+		}
+	}
+
 	exprHash := billingexpr.ExprHashString(exprStr)
 	snapshot := &billingexpr.BillingSnapshot{
 		BillingMode:               billing_setting.BillingModeTieredExpr,
