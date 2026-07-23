@@ -1015,6 +1015,7 @@ const TopUp = () => {
           activeSubscriptions={activeSubscriptions}
           allSubscriptions={allSubscriptions}
           reloadSubscriptionSelf={getSubscriptionSelf}
+          reloadUser={getUserQuota}
           enableRedemption={topupInfo.enable_redemption !== false}
         />
         <InvitationCard

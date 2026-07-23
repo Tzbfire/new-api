@@ -478,6 +478,19 @@ func GetSelf(c *gin.Context) {
 	// 获取用户设置并提取sidebar_modules
 	userSetting := user.GetSetting()
 
+	quotaBucketSummary := map[string]interface{}{
+		"enabled": model.IsQuotaBucketBillingEnabled(),
+		"groups":  []model.UserQuotaBucketGroupSummary{},
+	}
+	if model.IsQuotaBucketBillingEnabled() {
+		groups, err := model.GetUserQuotaBucketGroupSummaries(user.Id)
+		if err != nil {
+			common.SysLog(fmt.Sprintf("failed to get user quota bucket summaries (userId=%d): %s", user.Id, err.Error()))
+		} else {
+			quotaBucketSummary["groups"] = groups
+		}
+	}
+
 	// 构建响应数据，包含用户信息和权限
 	responseData := map[string]interface{}{
 		"id":                user.Id,
@@ -503,6 +516,7 @@ func GetSelf(c *gin.Context) {
 		"linux_do_id":       user.LinuxDOId,
 		"setting":           user.Setting,
 		"stripe_customer":   user.StripeCustomer,
+		"quota_buckets":     quotaBucketSummary,
 		"sidebar_modules":   userSetting.SidebarModules, // 正确提取sidebar_modules字段
 		"permissions":       permissions,                // 新增权限字段
 	}
@@ -1130,7 +1144,7 @@ func ManageUser(c *gin.Context) {
 			})
 		case "override":
 			oldQuota := user.Quota
-			if err := model.DB.Model(&model.User{}).Where("id = ?", user.Id).Update("quota", req.Value).Error; err != nil {
+			if err := model.ResetUserQuotaBuckets(user.Id, req.Value, model.QuotaBucketSourceAdmin, "", model.QuotaBucketBillingGroupDefault); err != nil {
 				common.ApiError(c, err)
 				return
 			}

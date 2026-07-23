@@ -242,6 +242,17 @@ export interface UserWalletData {
   aff_count: number
   /** User group */
   group: string
+  /** Quota bucket summary */
+  quota_buckets?: {
+    enabled?: boolean
+    groups?: Array<{
+      billing_group?: string
+      amount_total?: number
+      amount_remaining?: number
+      amount_used?: number
+      bucket_count?: number
+    }>
+  }
 }
 
 /**

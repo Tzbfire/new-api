@@ -57,6 +57,8 @@ const OPTION_KEYS = [
   'group_ratio_setting.group_special_usable_group',
   'AutoGroups',
   'DefaultUseAutoGroup',
+  'QuotaBucketBillingEnabled',
+  'PaidQuotaBillingGroup',
 ];
 
 function parseJSONSafe(str, fallback) {
@@ -81,6 +83,8 @@ export default function GroupRatioSettings(props) {
     'group_ratio_setting.group_special_usable_group': '',
     AutoGroups: '',
     DefaultUseAutoGroup: false,
+    QuotaBucketBillingEnabled: false,
+    PaidQuotaBillingGroup: 'vip',
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -225,6 +229,49 @@ export default function GroupRatioSettings(props) {
           groupNames={groupNames}
           onChange={handleAutoGroupsChange}
         />
+      </Form.Section>
+
+      <Form.Section text={t('余额桶计费')}>
+        <Text type='tertiary' size='small' style={{ display: 'block', marginBottom: 12 }}>
+          {t('启用后，充值和兑换码额度进入付费余额桶，并按指定权益分组倍率扣费；用户原有余额和赠送额度仍按普通分组倍率扣费。默认关闭。')}
+        </Text>
+        <Row gutter={16}>
+          <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+            <Form.Slot label={t('启用余额桶严格计费')}>
+              <div className='flex items-center gap-2'>
+                <Switch
+                  checked={!!inputs.QuotaBucketBillingEnabled}
+                  size='default'
+                  checkedText='｜'
+                  uncheckedText='〇'
+                  onChange={(value) =>
+                    setInputs((prev) => ({
+                      ...prev,
+                      QuotaBucketBillingEnabled: value,
+                    }))
+                  }
+                />
+              </div>
+              <Text type='tertiary' size='small' style={{ marginTop: 4 }}>
+                {t('关闭时保持旧的 users.quota 单余额逻辑。')}
+              </Text>
+            </Form.Slot>
+          </Col>
+          <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+            <Form.Input
+              field='PaidQuotaBillingGroup'
+              label={t('付费额度权益分组')}
+              placeholder='vip'
+              extraText={t('充值/兑换码额度使用该分组倍率，必须与分组倍率里的 key 完全一致。')}
+              onChange={(value) =>
+                setInputs((prev) => ({
+                  ...prev,
+                  PaidQuotaBillingGroup: value,
+                }))
+              }
+            />
+          </Col>
+        </Row>
       </Form.Section>
 
       <Form.Section text={t('分组特殊倍率')}>
@@ -396,6 +443,37 @@ export default function GroupRatioSettings(props) {
               ]}
               onChange={(value) =>
                 setInputs((prev) => ({ ...prev, AutoGroups: value }))
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col span={16}>
+            <Form.Switch
+              label={t('启用余额桶严格计费')}
+              field={'QuotaBucketBillingEnabled'}
+              extraText={t('启用后，充值和兑换码额度进入付费余额桶；默认关闭。')}
+              onChange={(value) =>
+                setInputs((prev) => ({
+                  ...prev,
+                  QuotaBucketBillingEnabled: value,
+                }))
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.Input
+              label={t('付费额度权益分组')}
+              placeholder='vip'
+              field={'PaidQuotaBillingGroup'}
+              extraText={t('充值/兑换码额度使用该分组倍率，必须与分组倍率里的 key 完全一致。')}
+              onChange={(value) =>
+                setInputs((prev) => ({
+                  ...prev,
+                  PaidQuotaBillingGroup: value,
+                }))
               }
             />
           </Col>

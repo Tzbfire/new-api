@@ -61,6 +61,8 @@ const defaultModelSettings: ModelSettings = {
   GroupGroupRatio: '',
   AutoGroups: '',
   DefaultUseAutoGroup: false,
+  QuotaBucketBillingEnabled: false,
+  PaidQuotaBillingGroup: 'VIP',
   'group_ratio_setting.group_special_usable_group': '{}',
   RetryTimes: 0,
   ChannelDisableThreshold: '',

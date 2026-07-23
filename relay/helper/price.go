@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -40,6 +41,65 @@ const claudeCacheCreation1hMultiplier = 6 / 3.75
 // the pre-consumed quota still reflects a plausible output cost in paid groups.
 const defaultTieredPreConsumeMaxTokens = 8192
 
+func quotaBucketBillingAppliesToWallet(info *relaycommon.RelayInfo) bool {
+	if info == nil || !setting.QuotaBucketBillingEnabled {
+		return false
+	}
+	pref := common.NormalizeBillingPreference(info.UserSetting.BillingPreference)
+	switch pref {
+	case "subscription_only":
+		return false
+	case "wallet_only", "wallet_first":
+		return true
+	case "subscription_first", "":
+		fallthrough
+	default:
+		hasSub, err := model.HasActiveUserSubscriptionForGroup(info.UserId, info.UsingGroup)
+		if err != nil {
+			common.SysLog("failed to check active subscription for quota bucket billing: " + err.Error())
+			return false
+		}
+		return !hasSub
+	}
+}
+
+func prepareQuotaBucketBillingGroup(ctx *gin.Context, info *relaycommon.RelayInfo) {
+	if !quotaBucketBillingAppliesToWallet(info) {
+		return
+	}
+	paidGroup := model.GetPaidQuotaBillingGroup()
+	balance, err := model.GetUserQuotaBucketBalance(info.UserId, paidGroup)
+	if err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("quota bucket billing balance check failed: %s", err.Error()))
+		return
+	}
+	if balance > 0 {
+		info.BillingGroup = paidGroup
+	}
+}
+
+func fallbackQuotaBucketBillingGroup(ctx *gin.Context, info *relaycommon.RelayInfo, quota int) bool {
+	if !quotaBucketBillingAppliesToWallet(info) || quota <= 0 {
+		return false
+	}
+	paidGroup := model.GetPaidQuotaBillingGroup()
+	if info.BillingGroup != paidGroup {
+		return false
+	}
+	balance, err := model.GetUserQuotaBucketBalance(info.UserId, paidGroup)
+	if err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("quota bucket billing fallback balance check failed: %s", err.Error()))
+		return false
+	}
+	if balance >= quota {
+		return false
+	}
+	logger.LogInfo(ctx, fmt.Sprintf("用户 %d 的 %s 余额桶不足，回退普通余额桶计费（付费桶余额: %s，需要: %s）",
+		info.UserId, paidGroup, logger.FormatQuota(balance), logger.FormatQuota(quota)))
+	info.BillingGroup = ""
+	return true
+}
+
 // HandleGroupRatio checks for "auto_group" in the context and updates the group ratio and relayInfo.UsingGroup if present
 func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.GroupRatioInfo {
 	groupRatioInfo := types.GroupRatioInfo{
@@ -55,7 +115,11 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 	}
 
 	// check user group special ratio
-	userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup)
+	effectiveUserGroup := relayInfo.UserGroup
+	if setting.QuotaBucketBillingEnabled && relayInfo.BillingGroup != "" {
+		effectiveUserGroup = relayInfo.BillingGroup
+	}
+	userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(effectiveUserGroup, relayInfo.UsingGroup)
 	if ok {
 		// user group special ratio
 		groupRatioInfo.GroupSpecialRatio = userGroupRatio
@@ -72,6 +136,7 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
 	modelPrice, usePrice := ratio_setting.GetModelPrice(info.OriginModelName, false)
 
+	prepareQuotaBucketBillingGroup(c, info)
 	groupRatioInfo := HandleGroupRatio(c, info)
 
 	// Check if this model uses tiered_expr billing
@@ -144,6 +209,37 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		}
 	}
 
+	if fallbackQuotaBucketBillingGroup(c, info, preConsumedQuota) {
+		groupRatioInfo = HandleGroupRatio(c, info)
+		freeModel = false
+		if !usePrice {
+			preConsumedTokens := common.Max(promptTokens, common.PreConsumedQuota)
+			if meta.MaxTokens != 0 {
+				preConsumedTokens += meta.MaxTokens
+			}
+			ratio := modelRatio * groupRatioInfo.GroupRatio
+			preConsumedQuota = common.QuotaFromFloat(float64(preConsumedTokens) * ratio)
+		} else {
+			preConsumedQuota = common.QuotaFromFloat(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		}
+		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
+			if groupRatioInfo.GroupRatio == 0 {
+				preConsumedQuota = 0
+				freeModel = true
+			} else if usePrice {
+				if modelPrice == 0 {
+					preConsumedQuota = 0
+					freeModel = true
+				}
+			} else {
+				if modelRatio == 0 {
+					preConsumedQuota = 0
+					freeModel = true
+				}
+			}
+		}
+	}
+
 	priceData := types.PriceData{
 		FreeModel:            freeModel,
 		ModelPrice:           modelPrice,
@@ -170,6 +266,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 
 // ModelPriceHelperPerCall 按次/按量计费的 PriceHelper (MJ、Task)
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types.PriceData, error) {
+	prepareQuotaBucketBillingGroup(c, info)
 	groupRatioInfo := HandleGroupRatio(c, info)
 
 	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
@@ -214,6 +311,28 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 			if groupRatioInfo.GroupRatio == 0 || modelRatio == 0 {
 				quota = 0
 				freeModel = true
+			}
+		}
+	}
+
+	if fallbackQuotaBucketBillingGroup(c, info, quota) {
+		groupRatioInfo = HandleGroupRatio(c, info)
+		freeModel = false
+		if usePrice {
+			quota = common.QuotaFromFloat(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+			if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
+				if groupRatioInfo.GroupRatio == 0 || modelPrice == 0 {
+					quota = 0
+					freeModel = true
+				}
+			}
+		} else {
+			quota = common.QuotaFromFloat(modelRatio / 2 * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+			if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
+				if groupRatioInfo.GroupRatio == 0 || modelRatio == 0 {
+					quota = 0
+					freeModel = true
+				}
 			}
 		}
 	}
@@ -275,6 +394,28 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 	freeModel := false
 	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 		if groupRatioInfo.GroupRatio == 0 {
+			preConsumedQuota = 0
+			freeModel = true
+		}
+	}
+
+	if fallbackQuotaBucketBillingGroup(c, info, preConsumedQuota) {
+		groupRatioInfo = HandleGroupRatio(c, info)
+		if meta.MaxTokens == 0 && groupRatioInfo.GroupRatio == 0 {
+			estimatedCompletionTokens = 0
+		}
+		rawCost, trace, err = billingexpr.RunExprWithRequest(exprStr, billingexpr.TokenParams{
+			P:   float64(promptTokens),
+			C:   float64(estimatedCompletionTokens),
+			Len: float64(promptTokens),
+		}, requestInput)
+		if err != nil {
+			return types.PriceData{}, fmt.Errorf("model %s tiered expr run failed after quota bucket fallback: %w", info.OriginModelName, err)
+		}
+		quotaBeforeGroup = rawCost / 1_000_000 * common.QuotaPerUnit
+		preConsumedQuota = billingexpr.QuotaRound(quotaBeforeGroup * groupRatioInfo.GroupRatio)
+		freeModel = false
+		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && groupRatioInfo.GroupRatio == 0 {
 			preConsumedQuota = 0
 			freeModel = true
 		}
