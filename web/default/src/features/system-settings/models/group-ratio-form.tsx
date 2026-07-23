@@ -42,6 +42,7 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import { Input } from '@/components/ui/input'
 import {
   Sheet,
   SheetContent,
@@ -69,6 +70,8 @@ type GroupFormValues = {
   GroupGroupRatio: string
   AutoGroups: string
   DefaultUseAutoGroup: boolean
+  QuotaBucketBillingEnabled: boolean
+  PaidQuotaBillingGroup: string
   GroupSpecialUsableGroup: string
 }
 
@@ -205,6 +208,63 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                 </SettingsSwitchItem>
               )}
             />
+
+            <div className='space-y-4 rounded-lg border p-4'>
+              <div className='space-y-1'>
+                <h3 className='text-sm font-medium'>
+                  {t('Quota bucket billing')}
+                </h3>
+                <p className='text-muted-foreground text-sm'>
+                  {t(
+                    'When enabled, top-up and redemption quota enters the paid quota bucket and is billed with the configured entitlement group ratio. Legacy and gifted quota remains in the default bucket.'
+                  )}
+                </p>
+              </div>
+
+              <FormField
+                control={form.control}
+                name='QuotaBucketBillingEnabled'
+                render={({ field }) => (
+                  <SettingsSwitchItem>
+                    <SettingsSwitchContent>
+                      <FormLabel>
+                        {t('Enable strict quota bucket billing')}
+                      </FormLabel>
+                      <FormDescription>
+                        {t(
+                          'When disabled, the system keeps the legacy single users.quota balance behavior.'
+                        )}
+                      </FormDescription>
+                    </SettingsSwitchContent>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </SettingsSwitchItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='PaidQuotaBillingGroup'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Paid quota entitlement group')}</FormLabel>
+                    <FormControl>
+                      <Input placeholder='VIP' {...field} />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Top-up and redemption quota uses this group ratio. It must exactly match a key in the group ratio settings.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
           </div>
         ) : (
           <SettingsForm onSubmit={form.handleSubmit(onSave)}>
@@ -347,6 +407,50 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                 </SettingsSwitchItem>
               )}
             />
+
+            <FormField
+              control={form.control}
+              name='QuotaBucketBillingEnabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>
+                      {t('Enable strict quota bucket billing')}
+                    </FormLabel>
+                    <FormDescription>
+                      {t(
+                        'When enabled, top-up and redemption quota enters the paid quota bucket.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='PaidQuotaBillingGroup'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Paid quota entitlement group')}</FormLabel>
+                  <FormControl>
+                    <Input placeholder='VIP' {...field} />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Top-up and redemption quota uses this group ratio. It must exactly match a key in the group ratio settings.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
           </SettingsForm>
         )}
       </Form>
@@ -404,7 +508,9 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
 
         <div className={sideDrawerFormClassName('gap-5')}>
           <section className='space-y-2'>
-            <h3 className='text-sm font-semibold'>{t('The two roles of a group')}</h3>
+            <h3 className='text-sm font-semibold'>
+              {t('The two roles of a group')}
+            </h3>
             <div className='text-muted-foreground space-y-2 text-sm leading-6'>
               <p>
                 {t(
@@ -416,7 +522,9 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                   {t('Token group')}
                 </span>
                 {': '}
-                {t('decides which channels are used and which base ratio applies.')}
+                {t(
+                  'decides which channels are used and which base ratio applies.'
+                )}
               </p>
               <p>
                 <span className='text-foreground font-medium'>
@@ -431,7 +539,9 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
           </section>
 
           <section className='space-y-2'>
-            <h3 className='text-sm font-semibold'>{t('How a call is priced')}</h3>
+            <h3 className='text-sm font-semibold'>
+              {t('How a call is priced')}
+            </h3>
             <ol className='text-muted-foreground list-decimal space-y-2 pl-5 text-sm leading-6'>
               <li>
                 <span className='text-foreground font-medium'>
@@ -453,7 +563,9 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                 <span className='text-foreground font-medium'>
                   {t('Charge.')}
                 </span>{' '}
-                {t('Cost = model price × that one ratio. Nothing else from the group settings enters the formula.')}
+                {t(
+                  'Cost = model price × that one ratio. Nothing else from the group settings enters the formula.'
+                )}
               </li>
             </ol>
             <p className='text-muted-foreground text-sm leading-6'>
@@ -466,7 +578,9 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
           <section className='space-y-3'>
             <h3 className='text-sm font-semibold'>{t('Worked example')}</h3>
             <p className='text-muted-foreground text-sm leading-6'>
-              {t('The admin configured three groups and one special ratio rule:')}
+              {t(
+                'The admin configured three groups and one special ratio rule:'
+              )}
             </p>
 
             <div className='overflow-hidden rounded-lg border'>
@@ -529,7 +643,9 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                 </div>
                 <div className='space-y-2 p-3'>
                   <GuideStepRow chip='1'>
-                    {t('Billing group = premium (the token has a group, so use it)')}
+                    {t(
+                      'Billing group = premium (the token has a group, so use it)'
+                    )}
                   </GuideStepRow>
                   <GuideStepRow chip='2'>
                     {t(
@@ -550,7 +666,9 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                 </div>
                 <div className='space-y-2 p-3'>
                   <GuideStepRow chip='1'>
-                    {t('Billing group = default (the token has a group, so use it)')}
+                    {t(
+                      'Billing group = default (the token has a group, so use it)'
+                    )}
                   </GuideStepRow>
                   <GuideStepRow chip='2'>
                     {t(

@@ -59,12 +59,13 @@ import type {
 import { formatQuota } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-import type { PaymentMethod, TopupInfo } from '../types'
+import type { PaymentMethod, TopupInfo, UserWalletData } from '../types'
 
 interface SubscriptionPlansCardProps {
   topupInfo: TopupInfo | null
   onAvailabilityChange?: (available: boolean) => void
   userQuota?: number
+  user?: UserWalletData | null
   onPurchaseSuccess?: () => void | Promise<void>
 }
 
@@ -113,6 +114,7 @@ export function SubscriptionPlansCard({
   topupInfo,
   onAvailabilityChange,
   userQuota,
+  user,
   onPurchaseSuccess,
 }: SubscriptionPlansCardProps) {
   const { t } = useTranslation()
@@ -140,6 +142,22 @@ export function SubscriptionPlansCard({
     () => getEpayMethods(topupInfo?.pay_methods),
     [topupInfo?.pay_methods]
   )
+  const quotaBucketInfo = user?.quota_buckets
+  const paidBucketSummary = useMemo(() => {
+    const groups = Array.isArray(quotaBucketInfo?.groups)
+      ? quotaBucketInfo.groups
+      : []
+    return (
+      groups.find(
+        (group) =>
+          group?.billing_group &&
+          group.billing_group.toLowerCase() !== 'default'
+      ) || null
+    )
+  }, [quotaBucketInfo?.groups])
+  const walletPurchaseEnabled = !!quotaBucketInfo?.enabled
+  const walletPaymentGroup = paidBucketSummary?.billing_group || 'VIP'
+  const walletBalance = Number(paidBucketSummary?.amount_remaining || 0)
 
   const fetchPlans = useCallback(async () => {
     try {
@@ -672,6 +690,9 @@ export function SubscriptionPlansCard({
         enableOnlineTopUp={enableOnlineTopUp}
         epayMethods={epayMethods}
         userQuota={userQuota}
+        enableWalletPurchase={walletPurchaseEnabled}
+        walletPaymentGroup={walletPaymentGroup}
+        walletBalance={walletBalance}
         onPurchaseSuccess={onPurchaseSuccess}
         purchaseLimit={
           selectedPlan?.plan?.max_purchase_per_user

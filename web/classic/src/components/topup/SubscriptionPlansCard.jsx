@@ -82,6 +82,8 @@ const SubscriptionPlansCard = ({
   activeSubscriptions = [],
   allSubscriptions = [],
   reloadSubscriptionSelf,
+  reloadUser,
+  userState,
   withCard = true,
 }) => {
   const [open, setOpen] = useState(false);
@@ -91,6 +93,17 @@ const SubscriptionPlansCard = ({
   const [refreshing, setRefreshing] = useState(false);
 
   const epayMethods = useMemo(() => getEpayMethods(payMethods), [payMethods]);
+  const quotaBucketInfo = userState?.user?.quota_buckets || {};
+  const quotaBucketGroups = Array.isArray(quotaBucketInfo?.groups)
+    ? quotaBucketInfo.groups
+    : [];
+  const paidBucketSummary =
+    quotaBucketGroups.find(
+      (g) => g?.billing_group && g.billing_group !== 'default',
+    ) || null;
+  const walletPurchaseEnabled = !!quotaBucketInfo?.enabled;
+  const walletPaymentGroup = paidBucketSummary?.billing_group || 'VIP';
+  const walletBalance = Number(paidBucketSummary?.amount_remaining || 0);
 
   const openBuy = (p) => {
     setSelectedPlan(p);
@@ -183,6 +196,34 @@ const SubscriptionPlansCard = ({
       if (res.data?.message === 'success') {
         submitEpayForm({ url: res.data.url, params: res.data.data });
         showSuccess(t('已发起支付'));
+        closeBuy();
+      } else {
+        const errorMsg =
+          typeof res.data?.data === 'string'
+            ? res.data.data
+            : res.data?.message || t('支付失败');
+        showError(errorMsg);
+      }
+    } catch (e) {
+      showError(t('支付请求失败'));
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  const payWallet = async () => {
+    if (!selectedPlan?.plan?.id) return;
+    setPaying(true);
+    try {
+      const res = await API.post('/api/subscription/wallet/pay', {
+        plan_id: selectedPlan.plan.id,
+      });
+      if (res.data?.success || res.data?.message === 'success') {
+        showSuccess(t('订阅购买成功'));
+        await Promise.all([
+          reloadSubscriptionSelf?.(),
+          reloadUser?.(),
+        ]);
         closeBuy();
       } else {
         const errorMsg =
@@ -673,6 +714,9 @@ const SubscriptionPlansCard = ({
         enableOnlineTopUp={enableOnlineTopUp}
         enableStripeTopUp={enableStripeTopUp}
         enableCreemTopUp={enableCreemTopUp}
+        enableWalletPurchase={walletPurchaseEnabled}
+        walletPaymentGroup={walletPaymentGroup}
+        walletBalance={walletBalance}
         purchaseLimitInfo={
           selectedPlan?.plan?.id
             ? {
@@ -684,6 +728,7 @@ const SubscriptionPlansCard = ({
         onPayStripe={payStripe}
         onPayCreem={payCreem}
         onPayEpay={payEpay}
+        onPayWallet={payWallet}
       />
     </>
   );

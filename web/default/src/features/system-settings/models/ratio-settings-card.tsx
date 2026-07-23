@@ -58,18 +58,19 @@ function formatJsonValidationError(
     )
   }
 
-  const parts = [
-    error.line && error.column
-      ? t('JSON is invalid at line {{line}}, column {{column}}.', {
-          line: error.line,
-          column: error.column,
-        })
-      : error.position !== undefined
-        ? t('JSON is invalid at position {{position}}.', {
-            position: error.position,
-          })
-        : t('JSON is invalid. Please check the syntax.'),
-  ]
+  let message = t('JSON is invalid. Please check the syntax.')
+  if (error.line && error.column) {
+    message = t('JSON is invalid at line {{line}}, column {{column}}.', {
+      line: error.line,
+      column: error.column,
+    })
+  } else if (error.position !== undefined) {
+    message = t('JSON is invalid at position {{position}}.', {
+      position: error.position,
+    })
+  }
+
+  const parts = [message]
 
   if (error.missingCommaLine) {
     parts.push(
@@ -125,6 +126,8 @@ const createGroupSchema = (t: Translate) =>
       predicateMessage: 'Expected a JSON array of group identifiers',
     }),
     DefaultUseAutoGroup: z.boolean(),
+    QuotaBucketBillingEnabled: z.boolean(),
+    PaidQuotaBillingGroup: z.string(),
     GroupSpecialUsableGroup: createJsonStringField(t),
   })
 
@@ -194,6 +197,8 @@ export function RatioSettingsCard({
     GroupGroupRatio: normalizeJsonString(groupDefaults.GroupGroupRatio),
     AutoGroups: normalizeJsonString(groupDefaults.AutoGroups),
     DefaultUseAutoGroup: groupDefaults.DefaultUseAutoGroup,
+    QuotaBucketBillingEnabled: groupDefaults.QuotaBucketBillingEnabled,
+    PaidQuotaBillingGroup: groupDefaults.PaidQuotaBillingGroup,
     GroupSpecialUsableGroup: normalizeJsonString(
       groupDefaults.GroupSpecialUsableGroup
     ),
@@ -231,6 +236,7 @@ export function RatioSettingsCard({
       UserUsableGroups: formatJsonForTextarea(groupDefaults.UserUsableGroups),
       GroupGroupRatio: formatJsonForTextarea(groupDefaults.GroupGroupRatio),
       AutoGroups: formatJsonForTextarea(groupDefaults.AutoGroups),
+      PaidQuotaBillingGroup: groupDefaults.PaidQuotaBillingGroup,
       GroupSpecialUsableGroup: formatJsonForTextarea(
         groupDefaults.GroupSpecialUsableGroup
       ),
@@ -280,6 +286,8 @@ export function RatioSettingsCard({
       GroupGroupRatio: normalizeJsonString(groupDefaults.GroupGroupRatio),
       AutoGroups: normalizeJsonString(groupDefaults.AutoGroups),
       DefaultUseAutoGroup: groupDefaults.DefaultUseAutoGroup,
+      QuotaBucketBillingEnabled: groupDefaults.QuotaBucketBillingEnabled,
+      PaidQuotaBillingGroup: groupDefaults.PaidQuotaBillingGroup,
       GroupSpecialUsableGroup: normalizeJsonString(
         groupDefaults.GroupSpecialUsableGroup
       ),
@@ -292,6 +300,7 @@ export function RatioSettingsCard({
       UserUsableGroups: formatJsonForTextarea(groupDefaults.UserUsableGroups),
       GroupGroupRatio: formatJsonForTextarea(groupDefaults.GroupGroupRatio),
       AutoGroups: formatJsonForTextarea(groupDefaults.AutoGroups),
+      PaidQuotaBillingGroup: groupDefaults.PaidQuotaBillingGroup,
       GroupSpecialUsableGroup: formatJsonForTextarea(
         groupDefaults.GroupSpecialUsableGroup
       ),
@@ -350,6 +359,8 @@ export function RatioSettingsCard({
         GroupGroupRatio: normalizeJsonString(values.GroupGroupRatio),
         AutoGroups: normalizeJsonString(values.AutoGroups),
         DefaultUseAutoGroup: values.DefaultUseAutoGroup,
+        QuotaBucketBillingEnabled: values.QuotaBucketBillingEnabled,
+        PaidQuotaBillingGroup: values.PaidQuotaBillingGroup,
         GroupSpecialUsableGroup: normalizeJsonString(
           values.GroupSpecialUsableGroup
         ),

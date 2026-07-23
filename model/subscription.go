@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/samber/hot"
 	"github.com/shopspring/decimal"
@@ -565,7 +566,7 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			return nil, errors.New("已达到该套餐购买上限")
 		}
 	}
-	nowUnix := GetDBTimestamp()
+	nowUnix := getDBTimestampTx(tx)
 	now := time.Unix(nowUnix, 0)
 	endUnix, err := calcPlanEndTime(now, plan)
 	if err != nil {
@@ -619,6 +620,148 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		return nil, err
 	}
 	return sub, nil
+}
+
+func updateUserBillingPreferenceToSubscriptionFirst(userId int) error {
+	if userId <= 0 {
+		return errors.New("invalid userId")
+	}
+	user, err := GetUserById(userId, true)
+	if err != nil {
+		return err
+	}
+	current := user.GetSetting()
+	normalized := common.NormalizeBillingPreference(current.BillingPreference)
+	if normalized == "subscription_first" || normalized == "subscription_only" {
+		return nil
+	}
+	current.BillingPreference = "subscription_first"
+	user.SetSetting(current)
+	if err := DB.Model(&User{}).Where("id = ?", userId).Update("setting", user.Setting).Error; err != nil {
+		return err
+	}
+	return updateUserCache(*user)
+}
+
+type SubscriptionWalletPurchaseResult struct {
+	TradeNo        string  `json:"trade_no"`
+	PlanId         int     `json:"plan_id"`
+	PlanTitle      string  `json:"plan_title"`
+	SubscriptionId int     `json:"subscription_id"`
+	PriceAmount    float64 `json:"price_amount"`
+	ChargedQuota   int     `json:"charged_quota"`
+	BillingGroup   string  `json:"billing_group"`
+}
+
+func subscriptionWalletChargeQuota(plan *SubscriptionPlan) (int, error) {
+	if plan == nil {
+		return 0, errors.New("套餐不存在")
+	}
+	if plan.PriceAmount < 0.01 {
+		return 0, errors.New("套餐金额过低")
+	}
+	quotaDecimal := decimal.NewFromFloat(plan.PriceAmount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).Ceil()
+	if !quotaDecimal.IsPositive() {
+		return 0, errors.New("套餐金额过低")
+	}
+	return int(quotaDecimal.IntPart()), nil
+}
+
+func PurchaseSubscriptionWithWallet(userId int, planId int) (*SubscriptionWalletPurchaseResult, error) {
+	if userId <= 0 || planId <= 0 {
+		return nil, errors.New("参数错误")
+	}
+	if !IsQuotaBucketBillingEnabled() {
+		return nil, errors.New("VIP余额支付未启用")
+	}
+	plan, err := GetSubscriptionPlanById(planId)
+	if err != nil {
+		return nil, err
+	}
+	if !plan.Enabled {
+		return nil, errors.New("套餐未启用")
+	}
+	chargedQuota, err := subscriptionWalletChargeQuota(plan)
+	if err != nil {
+		return nil, err
+	}
+
+	billingGroup := GetPaidQuotaBillingGroup()
+	if billingGroup == QuotaBucketBillingGroupDefault {
+		return nil, errors.New("付费余额桶分组不能为 default")
+	}
+	now := common.GetTimestamp()
+	tradeNo := fmt.Sprintf("SUBWALLETUSR%dNO%d%s", userId, now, common.GetRandomString(8))
+	result := &SubscriptionWalletPurchaseResult{
+		TradeNo:      tradeNo,
+		PlanId:       plan.Id,
+		PlanTitle:    plan.Title,
+		PriceAmount:  plan.PriceAmount,
+		ChargedQuota: chargedQuota,
+		BillingGroup: billingGroup,
+	}
+	upgradeGroup := strings.TrimSpace(plan.UpgradeGroup)
+
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := ensureUserQuotaBucketsMigratedTx(tx, userId); err != nil {
+			return err
+		}
+		meta := QuotaBucketChargeMeta{
+			RequestID:    tradeNo,
+			UsingGroup:   "subscription",
+			BillingGroup: billingGroup,
+			ModelName:    "subscription:" + plan.Title,
+		}
+		chargePlan := &QuotaBucketChargePlan{
+			UserId:       userId,
+			BillingGroup: billingGroup,
+			RequestID:    tradeNo,
+			PreConsumed:  chargedQuota,
+			Allocations:  make([]QuotaBucketAllocation, 0),
+		}
+		if err := debitUserQuotaBucketsTx(tx, userId, chargedQuota, meta, QuotaBucketTxnTypeSubPurchase, false, chargePlan); err != nil {
+			return err
+		}
+		sub, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, "wallet")
+		if err != nil {
+			return err
+		}
+		order := &SubscriptionOrder{
+			UserId:        userId,
+			PlanId:        plan.Id,
+			Money:         plan.PriceAmount,
+			TradeNo:       tradeNo,
+			PaymentMethod: PaymentMethodWallet,
+			Status:        common.TopUpStatusSuccess,
+			CreateTime:    now,
+			CompleteTime:  now,
+			ProviderPayload: common.GetJsonString(map[string]interface{}{
+				"billing_group": billingGroup,
+				"charged_quota": chargedQuota,
+				"bucket_plan":   chargePlan,
+			}),
+		}
+		if err := tx.Create(order).Error; err != nil {
+			return err
+		}
+		result.SubscriptionId = sub.Id
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	refreshUserQuotaCacheFromDB(userId, "subscription wallet purchase")
+	if upgradeGroup != "" {
+		_ = UpdateUserGroupCache(userId, upgradeGroup)
+	}
+	if err := updateUserBillingPreferenceToSubscriptionFirst(userId); err != nil {
+		common.SysLog("failed to update user billing preference after subscription wallet purchase: " + err.Error())
+	}
+	RecordLog(userId, LogTypeTopup, fmt.Sprintf("使用%s余额购买订阅成功，套餐: %s，扣除额度: %s，支付金额: %.2f",
+		billingGroup, plan.Title, logger.FormatQuota(chargedQuota), plan.PriceAmount))
+
+	return result, nil
 }
 
 // Complete a subscription order (idempotent). Creates a UserSubscription snapshot from the plan.
@@ -798,6 +941,10 @@ func calcSubscriptionBalanceQuota(priceAmount float64) (int, error) {
 func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 	if userId <= 0 || planId <= 0 {
 		return errors.New("invalid userId or planId")
+	}
+	if IsQuotaBucketBillingEnabled() {
+		_, err := PurchaseSubscriptionWithWallet(userId, planId)
+		return err
 	}
 
 	var logPlanTitle string
