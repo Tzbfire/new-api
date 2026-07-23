@@ -47,6 +47,8 @@ const getGroupDefaults = (settings: BillingSettings) => ({
   GroupGroupRatio: settings.GroupGroupRatio,
   AutoGroups: settings.AutoGroups,
   DefaultUseAutoGroup: settings.DefaultUseAutoGroup,
+  QuotaBucketBillingEnabled: settings.QuotaBucketBillingEnabled,
+  PaidQuotaBillingGroup: settings.PaidQuotaBillingGroup,
   GroupSpecialUsableGroup:
     settings['group_ratio_setting.group_special_usable_group'],
 })

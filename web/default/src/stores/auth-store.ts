@@ -51,6 +51,16 @@ export interface AuthUser {
   stripe_customer?: string
   sidebar_modules?: string
   permissions?: UserPermissions
+  quota_buckets?: {
+    enabled?: boolean
+    groups?: Array<{
+      billing_group?: string
+      amount_total?: number
+      amount_remaining?: number
+      amount_used?: number
+      bucket_count?: number
+    }>
+  }
 }
 
 interface AuthState {

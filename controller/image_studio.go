@@ -297,6 +297,7 @@ func CreateImageStudioTask(c *gin.Context) {
 				task.Quota = hold.Quota
 				task.PrivateData.StudioHeldQuota = hold.Quota
 				task.PrivateData.BillingSource = hold.Source
+				task.PrivateData.BillingGroup = hold.BillingGroup
 				task.PrivateData.SubscriptionId = hold.SubscriptionId
 			}
 		}
@@ -415,6 +416,7 @@ func runImageStudioClaimedTask(task *model.Task) {
 		service.SetImageStudioPreheldBilling(c, service.ImageStudioPrehold{
 			Quota:          task.PrivateData.StudioHeldQuota,
 			Source:         task.PrivateData.BillingSource,
+			BillingGroup:   task.PrivateData.BillingGroup,
 			SubscriptionId: task.PrivateData.SubscriptionId,
 			RequestId:      task.PrivateData.RequestId,
 		})

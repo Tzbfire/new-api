@@ -61,6 +61,7 @@ const imageStudioPreheldQuotaKey = "image_studio_preheld_quota"
 type ImageStudioPrehold struct {
 	Quota          int
 	Source         string
+	BillingGroup   string
 	SubscriptionId int
 	RequestId      string
 }
@@ -144,6 +145,7 @@ func PreHoldImageStudioBilling(c *gin.Context, relayInfo *relaycommon.RelayInfo,
 	hold := ImageStudioPrehold{
 		Quota:          session.GetPreConsumedQuota(),
 		Source:         relayInfo.BillingSource,
+		BillingGroup:   relayInfo.BillingGroup,
 		SubscriptionId: relayInfo.SubscriptionId,
 		RequestId:      relayInfo.RequestId,
 	}
@@ -206,7 +208,24 @@ func adoptImageStudioPreheldBilling(c *gin.Context, relayInfo *relaycommon.Relay
 		}
 		funding = subFunding
 	} else {
-		funding = &WalletFunding{userId: relayInfo.UserId, forceDB: true, consumed: held}
+		if hold.BillingGroup != "" {
+			relayInfo.BillingGroup = hold.BillingGroup
+		}
+		channelId := 0
+		if relayInfo.ChannelMeta != nil {
+			channelId = relayInfo.ChannelId
+		}
+		funding = &WalletFunding{
+			userId:       relayInfo.UserId,
+			requestId:    hold.RequestId,
+			billingGroup: hold.BillingGroup,
+			usingGroup:   relayInfo.UsingGroup,
+			modelName:    relayInfo.OriginModelName,
+			tokenId:      relayInfo.TokenId,
+			channelId:    channelId,
+			consumed:     held,
+			forceDB:      true,
+		}
 	}
 
 	session := &BillingSession{

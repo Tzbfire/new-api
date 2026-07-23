@@ -101,8 +101,14 @@ func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) 
 		}
 
 		// 步骤2: 在事务中增加用户额度
-		if err := tx.Model(&User{}).Where("id = ?", userId).
-			Update("quota", gorm.Expr("quota + ?", quotaAwarded)).Error; err != nil {
+		var quotaErr error
+		if IsQuotaBucketBillingEnabled() {
+			quotaErr = creditUserQuotaBucketTx(tx, userId, quotaAwarded, QuotaBucketSourceCheckin, checkin.CheckinDate, QuotaBucketBillingGroupDefault, true)
+		} else {
+			quotaErr = tx.Model(&User{}).Where("id = ?", userId).
+				Update("quota", gorm.Expr("quota + ?", quotaAwarded)).Error
+		}
+		if quotaErr != nil {
 			return errors.New("签到失败：更新额度出错")
 		}
 

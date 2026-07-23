@@ -145,6 +145,13 @@ export function SummaryCards() {
   const remainQuota = Number(user?.quota ?? 0)
   const usedQuota = Number(user?.used_quota ?? 0)
   const requestCount = Number(user?.request_count ?? 0)
+  const quotaBucketGroups = user?.quota_buckets?.enabled
+    ? (user.quota_buckets.groups ?? []).filter(
+        (bucket) =>
+          Number(bucket?.amount_remaining ?? 0) > 0 ||
+          Number(bucket?.amount_used ?? 0) > 0
+      )
+    : []
 
   const usageTrendQuery = useQuery({
     queryKey: [
@@ -290,6 +297,30 @@ export function SummaryCards() {
             <div className='font-mono text-2xl font-semibold tracking-tight'>
               {formatQuota(remainQuota)}
             </div>
+
+            {quotaBucketGroups.length > 0 && (
+              <div className='bg-background/60 grid gap-1.5 rounded-lg px-2.5 py-2'>
+                {quotaBucketGroups.map((bucket) => {
+                  const group = bucket?.billing_group || ''
+                  const isDefault = group.toLowerCase() === 'default'
+                  const label = isDefault ? t('普通余额') : `${group}${t('余额')}`
+
+                  return (
+                    <div
+                      key={group || 'default'}
+                      className='flex items-center justify-between gap-3 text-xs'
+                    >
+                      <span className='text-muted-foreground truncate'>
+                        {label}
+                      </span>
+                      <span className='font-mono font-semibold tabular-nums'>
+                        {formatQuota(Number(bucket?.amount_remaining ?? 0))}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
 
             <div className='grid grid-cols-2 gap-2'>
               <div className='bg-background/60 rounded-lg px-2.5 py-2'>
