@@ -273,6 +273,9 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 			return err
 		}
 		notifyBillingSettlementObserver(ctx, relayInfo, actualQuota)
+		if err := model.RecordAffiliateUsageRebateFromBilling(relayInfo.RequestId, relayInfo.UserId, relayInfo.BillingSource, relayInfo.BillingGroup, relayInfo.SubscriptionId, actualQuota); err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("record affiliate usage rebate failed: %v", err))
+		}
 
 		// 发送额度通知（订阅计费使用订阅剩余额度）
 		if actualQuota != 0 {
@@ -293,5 +296,8 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 		}
 	}
 	notifyBillingSettlementObserver(ctx, relayInfo, actualQuota)
+	if err := model.RecordAffiliateUsageRebateFromBilling(relayInfo.RequestId, relayInfo.UserId, relayInfo.BillingSource, relayInfo.BillingGroup, relayInfo.SubscriptionId, actualQuota); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("record affiliate usage rebate failed: %v", err))
+	}
 	return nil
 }

@@ -33,6 +33,14 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { formatQuota } from '@/lib/format'
 
@@ -44,6 +52,8 @@ import {
   SettingsSwitchItem,
   SettingsFormGrid,
   SettingsFormGridItem,
+  SettingsControlChildren,
+  SettingsControlGroup,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
@@ -55,6 +65,10 @@ const quotaSchema = z.object({
   PreConsumedQuota: z.coerce.number().min(0),
   QuotaForInviter: z.coerce.number().min(0),
   QuotaForInvitee: z.coerce.number().min(0),
+  AffiliateUsageRebateEnabled: z.boolean(),
+  AffiliateUsageRebateBps: z.coerce.number().min(0).max(10000),
+  AffiliateUsageRebateGroup: z.string().min(1).max(64),
+  AffiliateUsageRebateHour: z.coerce.number().min(0).max(23),
   TopUpLink: z.string(),
   general_setting: z.object({
     docs_link: z.string(),
@@ -71,14 +85,24 @@ function formatQuotaInputValue(value: QuotaInputValue): string {
   return formatQuota(value === '' ? 0 : value)
 }
 
+function formatRebatePercentInputValue(value: unknown): number | '' {
+  if (value == null || value === '') {
+    return ''
+  }
+  const numericValue = Number(value)
+  return Number.isNaN(numericValue) ? '' : numericValue / 100
+}
+
 type QuotaSettingsSectionProps = {
   defaultValues: QuotaFormValues
   complianceConfirmed?: boolean
+  paidQuotaBillingGroup?: string
 }
 
 export function QuotaSettingsSection({
   defaultValues,
   complianceConfirmed = true,
+  paidQuotaBillingGroup = '',
 }: QuotaSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
@@ -88,6 +112,28 @@ export function QuotaSettingsSection({
       const value = event.currentTarget.valueAsNumber
       onChange(Number.isNaN(value) ? '' : value)
     }
+  const handlePercentChange =
+    (onChange: (value: QuotaInputValue) => void) =>
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const value = event.currentTarget.valueAsNumber
+      onChange(Number.isNaN(value) ? '' : Math.round(value * 100))
+    }
+
+  const paidRebateBucket = paidQuotaBillingGroup.trim()
+  const rebateBucketOptions = [
+    {
+      value: 'default',
+      label: `${t('Free quota bucket')} (default)`,
+    },
+    ...(paidRebateBucket && paidRebateBucket !== 'default'
+      ? [
+          {
+            value: paidRebateBucket,
+            label: `${t('Paid/VIP quota bucket')} (${paidRebateBucket})`,
+          },
+        ]
+      : []),
+  ]
 
   const { form, handleSubmit, isDirty, isSubmitting } =
     useSettingsForm<QuotaFormValues>({
@@ -263,45 +309,193 @@ export function QuotaSettingsSection({
               />
             </SettingsFormGridItem>
 
-            <FormField
-              control={form.control}
-              name='TopUpLink'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Top-Up Link')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      placeholder={t('https://example.com/topup')}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t('External link for users to purchase quota')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            <SettingsControlGroup className='space-y-4'>
+              <div>
+                <h4 className='text-sm font-medium'>
+                  {t('Affiliate rebate settings')}
+                </h4>
+                <p className='text-muted-foreground text-sm'>
+                  {t(
+                    'Configure daily settlement for invitation rebates generated from eligible actual usage.'
+                  )}
+                </p>
+              </div>
 
-            <FormField
-              control={form.control}
-              name='general_setting.docs_link'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Documentation Link')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      placeholder={t('https://docs.example.com')}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t('Link to your documentation site')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+              <FormField
+                control={form.control}
+                name='AffiliateUsageRebateEnabled'
+                render={({ field }) => (
+                  <SettingsSwitchItem className='py-0'>
+                    <SettingsSwitchContent>
+                      <FormLabel>{t('Affiliate Usage Rebate')}</FormLabel>
+                      <FormDescription>
+                        {t(
+                          'When enabled, invited users generate daily rebates for inviters only after actually consuming eligible purchased quota.'
+                        )}
+                      </FormDescription>
+                    </SettingsSwitchContent>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                        disabled={updateOption.isPending}
+                      />
+                    </FormControl>
+                  </SettingsSwitchItem>
+                )}
+              />
+
+              <SettingsControlChildren className='grid gap-4 md:grid-cols-3'>
+                <FormField
+                  control={form.control}
+                  name='AffiliateUsageRebateBps'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Affiliate Rebate Percentage')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={0}
+                          max={100}
+                          step={0.01}
+                          value={formatRebatePercentInputValue(field.value)}
+                          onChange={handlePercentChange(field.onChange)}
+                          name={field.name}
+                          onBlur={field.onBlur}
+                          ref={field.ref}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t('Daily rebate rate. Example: 10 means 10%.')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='AffiliateUsageRebateGroup'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        {t('Affiliate Rebate Bucket Group')}
+                      </FormLabel>
+                      <Select
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        disabled={updateOption.isPending}
+                      >
+                        <FormControl>
+                          <SelectTrigger className='w-full'>
+                            <SelectValue
+                              placeholder={t('Select rebate bucket')}
+                            />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            {rebateBucketOptions.map((option) => (
+                              <SelectItem
+                                key={option.value}
+                                value={option.value}
+                              >
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        {t(
+                          'Select default for free quota bucket or the configured paid/VIP quota bucket.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='AffiliateUsageRebateHour'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        {t('Affiliate Rebate Settlement Hour')}
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={0}
+                          max={23}
+                          value={field.value ?? ''}
+                          onChange={handleNumberChange(field.onChange)}
+                          name={field.name}
+                          onBlur={field.onBlur}
+                          ref={field.ref}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t('Hour of day to settle yesterday rebates (0-23).')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </SettingsControlChildren>
+            </SettingsControlGroup>
+
+            <SettingsControlGroup className='space-y-4'>
+              <div>
+                <h4 className='text-sm font-medium'>{t('Link settings')}</h4>
+                <p className='text-muted-foreground text-sm'>
+                  {t('Manage external top-up and documentation links.')}
+                </p>
+              </div>
+
+              <SettingsControlChildren className='grid gap-4 md:grid-cols-2'>
+                <FormField
+                  control={form.control}
+                  name='TopUpLink'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Top-Up Link')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder={t('https://example.com/topup')}
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t('External link for users to purchase quota')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='general_setting.docs_link'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Documentation Link')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder={t('https://docs.example.com')}
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t('Link to your documentation site')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </SettingsControlChildren>
+            </SettingsControlGroup>
           </SettingsFormGrid>
         </SettingsForm>
       </Form>

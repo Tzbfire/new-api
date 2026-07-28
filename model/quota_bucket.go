@@ -17,15 +17,16 @@ const (
 
 	QuotaBucketBillingGroupDefault = "default"
 
-	QuotaBucketSourceMigration  = "migration"
-	QuotaBucketSourceTopup      = "topup"
-	QuotaBucketSourceRedemption = "redemption"
-	QuotaBucketSourceRegister   = "register"
-	QuotaBucketSourceInvite     = "invite"
-	QuotaBucketSourceCheckin    = "checkin"
-	QuotaBucketSourceAdmin      = "admin"
-	QuotaBucketSourceRefund     = "refund"
-	QuotaBucketSourceLegacy     = "legacy"
+	QuotaBucketSourceMigration       = "migration"
+	QuotaBucketSourceTopup           = "topup"
+	QuotaBucketSourceRedemption      = "redemption"
+	QuotaBucketSourceRegister        = "register"
+	QuotaBucketSourceInvite          = "invite"
+	QuotaBucketSourceAffiliateRebate = "affiliate_rebate"
+	QuotaBucketSourceCheckin         = "checkin"
+	QuotaBucketSourceAdmin           = "admin"
+	QuotaBucketSourceRefund          = "refund"
+	QuotaBucketSourceLegacy          = "legacy"
 
 	QuotaBucketTxnTypeCredit      = "credit"
 	QuotaBucketTxnTypeMigration   = "migration"
@@ -439,6 +440,8 @@ func debitUserQuotaBucketsTx(tx *gorm.DB, userId int, amount int, meta QuotaBuck
 			UserId:       userId,
 			BucketID:     bucket.Id,
 			Type:         txnType,
+			Source:       bucket.Source,
+			SourceID:     bucket.SourceID,
 			Delta:        -useAmount,
 			BalanceAfter: newRemaining,
 			UsingGroup:   meta.UsingGroup,
@@ -560,6 +563,8 @@ func refundUserQuotaBucketAmount(requestID string, userId int, amount int, all b
 				UserId:       debit.UserId,
 				BucketID:     bucket.Id,
 				Type:         QuotaBucketTxnTypeRefund,
+				Source:       bucket.Source,
+				SourceID:     bucket.SourceID,
 				Delta:        refundAmount,
 				BalanceAfter: newRemaining,
 				UsingGroup:   debit.UsingGroup,

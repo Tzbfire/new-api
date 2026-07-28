@@ -76,6 +76,33 @@ func validateImageStudioRetentionDays(value string) error {
 	return nil
 }
 
+func validateAffiliateRebateBps(value string) error {
+	bps, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || bps < 0 || bps > 10000 {
+		return fmt.Errorf("邀请实际消耗返利比例必须是 0-10000 之间的基点值")
+	}
+	return nil
+}
+
+func validateAffiliateRebateHour(value string) error {
+	hour, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || hour < 0 || hour > 23 {
+		return fmt.Errorf("邀请返利结算时间必须是 0-23 之间的整数")
+	}
+	return nil
+}
+
+func validateAffiliateRebateGroup(value string) error {
+	group := strings.TrimSpace(value)
+	if group == "" {
+		return fmt.Errorf("邀请返利到账额度桶不能为空")
+	}
+	if len(group) > 64 {
+		return fmt.Errorf("邀请返利到账额度桶长度不能超过 64")
+	}
+	return nil
+}
+
 func collectModelNamesFromOptionValue(raw string, modelNames map[string]struct{}) {
 	if strings.TrimSpace(raw) == "" {
 		return
@@ -184,6 +211,21 @@ func UpdateOption(c *gin.Context) {
 		}
 	}
 	switch option.Key {
+	case "AffiliateUsageRebateBps":
+		if err := validateAffiliateRebateBps(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "AffiliateUsageRebateHour":
+		if err := validateAffiliateRebateHour(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "AffiliateUsageRebateGroup":
+		if err := validateAffiliateRebateGroup(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
 	case "ImageStudioBatchConcurrency":
 		if err := validateImageStudioBatchConcurrency(option.Value.(string)); err != nil {
 			common.ApiErrorMsg(c, err.Error())

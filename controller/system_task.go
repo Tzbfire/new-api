@@ -3,6 +3,7 @@ package controller
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -24,6 +25,43 @@ func CreateLogCleanupSystemTask(c *gin.Context) {
 	task, err := service.StartLogCleanupTask(targetTimestamp)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    task.ToResponse(),
+	})
+}
+
+func CreateAffiliateRebateSettlementSystemTask(c *gin.Context) {
+	settlementDate := c.Query("date")
+	if settlementDate == "" {
+		settlementDate = model.AffiliateRebateYesterdayDate()
+	}
+	if _, err := time.Parse("2006-01-02", settlementDate); err != nil {
+		common.ApiErrorMsg(c, "date must use format YYYY-MM-DD")
+		return
+	}
+
+	task, created, err := service.EnqueueSystemTask(model.SystemTaskTypeAffiliateRebateSettlement, affiliateRebateSettlementPayload{
+		SettlementDate: settlementDate,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !created {
+		c.JSON(http.StatusConflict, gin.H{
+			"success": false,
+			"message": "已有邀请返利结算任务正在运行或等待中，不能启动本次手动任务",
+			"data": gin.H{
+				"task_id": task.TaskID,
+				"status":  task.Status,
+				"type":    task.Type,
+			},
+		})
 		return
 	}
 

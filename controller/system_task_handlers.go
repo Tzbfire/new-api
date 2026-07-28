@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
@@ -22,6 +23,7 @@ func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
+	service.RegisterSystemTaskHandler(affiliateRebateSettlementHandler{})
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and
@@ -149,6 +151,44 @@ func (asyncTaskPollHandler) NewPayload() any { return nil }
 
 func (asyncTaskPollHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
 	summary := service.RunTaskPollingOnce(ctx, service.NewSystemTaskProgressReporter(task, runnerID))
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+}
+
+type affiliateRebateSettlementHandler struct{}
+
+func (affiliateRebateSettlementHandler) Type() string {
+	return model.SystemTaskTypeAffiliateRebateSettlement
+}
+
+func (affiliateRebateSettlementHandler) Enabled() bool {
+	return setting.AffiliateUsageRebateEnabled &&
+		setting.AffiliateUsageRebateBps > 0 &&
+		time.Now().Hour() == setting.AffiliateUsageRebateHour
+}
+
+func (affiliateRebateSettlementHandler) Interval() time.Duration {
+	return time.Hour
+}
+
+type affiliateRebateSettlementPayload struct {
+	SettlementDate string `json:"settlement_date,omitempty"`
+}
+
+func (affiliateRebateSettlementHandler) NewPayload() any {
+	return affiliateRebateSettlementPayload{SettlementDate: model.AffiliateRebateYesterdayDate()}
+}
+
+func (affiliateRebateSettlementHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	payload := affiliateRebateSettlementPayload{}
+	if err := task.DecodePayload(&payload); err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	summary, err := model.RunAffiliateDailyRebateSettlement(ctx, payload.SettlementDate)
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
 	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 

@@ -57,6 +57,8 @@ func TestMain(m *testing.M) {
 		&SystemTaskLock{},
 		&UserQuotaBucket{},
 		&UserQuotaBucketTransaction{},
+		&AffiliateUsageRebateEvent{},
+		&AffiliateDailyRebateSettlement{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -89,6 +91,8 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM system_tasks")
 		DB.Exec("DELETE FROM user_quota_bucket_transactions")
 		DB.Exec("DELETE FROM user_quota_buckets")
+		DB.Exec("DELETE FROM affiliate_usage_rebate_events")
+		DB.Exec("DELETE FROM affiliate_daily_rebate_settlements")
 	})
 }
 
