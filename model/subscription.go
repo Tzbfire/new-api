@@ -324,7 +324,10 @@ type UserSubscription struct {
 	EndTime   int64  `json:"end_time" gorm:"bigint;index;index:idx_user_sub_active,priority:3"`
 	Status    string `json:"status" gorm:"type:varchar(32);index;index:idx_user_sub_active,priority:2"` // active/expired/cancelled
 
-	Source string `json:"source" gorm:"type:varchar(32);default:'order'"` // order/admin
+	Source          string `json:"source" gorm:"type:varchar(32);default:'order'"` // order/admin/wallet/balance
+	PurchaseTradeNo string `json:"purchase_trade_no" gorm:"type:varchar(191);index;default:''"`
+	PaymentProvider string `json:"payment_provider" gorm:"type:varchar(50);default:''"`
+	PaymentMethod   string `json:"payment_method" gorm:"type:varchar(50);default:''"`
 
 	LastResetTime int64 `json:"last_reset_time" gorm:"type:bigint;default:0"`
 	NextResetTime int64 `json:"next_reset_time" gorm:"type:bigint;default:0;index"`
@@ -546,6 +549,10 @@ func downgradeUserGroupForSubscriptionTx(tx *gorm.DB, sub *UserSubscription, now
 }
 
 func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, source string) (*UserSubscription, error) {
+	return CreateUserSubscriptionFromPlanWithPurchaseTx(tx, userId, plan, source, "", "", "")
+}
+
+func CreateUserSubscriptionFromPlanWithPurchaseTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, source string, purchaseTradeNo string, paymentProvider string, paymentMethod string) (*UserSubscription, error) {
 	if tx == nil {
 		return nil, errors.New("tx is nil")
 	}
@@ -606,6 +613,9 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		EndTime:             endUnix,
 		Status:              "active",
 		Source:              source,
+		PurchaseTradeNo:     strings.TrimSpace(purchaseTradeNo),
+		PaymentProvider:     strings.TrimSpace(paymentProvider),
+		PaymentMethod:       strings.TrimSpace(paymentMethod),
 		LastResetTime:       lastReset,
 		NextResetTime:       nextReset,
 		UpgradeGroup:        upgradeGroup,
@@ -722,8 +732,11 @@ func PurchaseSubscriptionWithWallet(userId int, planId int) (*SubscriptionWallet
 		if err := debitUserQuotaBucketsTx(tx, userId, chargedQuota, meta, QuotaBucketTxnTypeSubPurchase, false, chargePlan); err != nil {
 			return err
 		}
-		sub, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, "wallet")
+		sub, err := CreateUserSubscriptionFromPlanWithPurchaseTx(tx, userId, plan, "wallet", tradeNo, PaymentProviderBalance, PaymentMethodWallet)
 		if err != nil {
+			return err
+		}
+		if err := RecordAffiliateUsageRebateFromWalletPurchaseTx(tx, tradeNo, userId, billingGroup, chargedQuota); err != nil {
 			return err
 		}
 		order := &SubscriptionOrder{
@@ -802,10 +815,18 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 			// still allow completion for already purchased orders
 		}
 		upgradeGroup = strings.TrimSpace(plan.UpgradeGroup)
-		_, err = CreateUserSubscriptionFromPlanTx(tx, order.UserId, plan, "order")
+		paymentMethod := order.PaymentMethod
+		if actualPaymentMethod != "" && paymentMethod != actualPaymentMethod {
+			paymentMethod = actualPaymentMethod
+		}
+		_, err = CreateUserSubscriptionFromPlanWithPurchaseTx(tx, order.UserId, plan, "order", order.TradeNo, order.PaymentProvider, paymentMethod)
 		if err != nil {
 			return err
 		}
+		if err := RecordAffiliateUsageRebateFromSubscriptionOrderPurchaseTx(tx, order.TradeNo, order.UserId, plan, order.PaymentProvider); err != nil {
+			return err
+		}
+		order.PaymentMethod = paymentMethod
 		if err := upsertSubscriptionTopUpTx(tx, &order); err != nil {
 			return err
 		}
@@ -813,9 +834,6 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		order.CompleteTime = common.GetTimestamp()
 		if providerPayload != "" {
 			order.ProviderPayload = providerPayload
-		}
-		if actualPaymentMethod != "" && order.PaymentMethod != actualPaymentMethod {
-			order.PaymentMethod = actualPaymentMethod
 		}
 		if err := tx.Save(&order).Error; err != nil {
 			return err
@@ -848,14 +866,15 @@ func upsertSubscriptionTopUpTx(tx *gorm.DB, order *SubscriptionOrder) error {
 	if err := tx.Where("trade_no = ?", order.TradeNo).First(&topup).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			topup = TopUp{
-				UserId:        order.UserId,
-				Amount:        0,
-				Money:         order.Money,
-				TradeNo:       order.TradeNo,
-				PaymentMethod: order.PaymentMethod,
-				CreateTime:    order.CreateTime,
-				CompleteTime:  now,
-				Status:        common.TopUpStatusSuccess,
+				UserId:          order.UserId,
+				Amount:          0,
+				Money:           order.Money,
+				TradeNo:         order.TradeNo,
+				PaymentMethod:   order.PaymentMethod,
+				PaymentProvider: order.PaymentProvider,
+				CreateTime:      order.CreateTime,
+				CompleteTime:    now,
+				Status:          common.TopUpStatusSuccess,
 			}
 			return tx.Create(&topup).Error
 		}
@@ -865,6 +884,11 @@ func upsertSubscriptionTopUpTx(tx *gorm.DB, order *SubscriptionOrder) error {
 	if topup.PaymentMethod == "" {
 		topup.PaymentMethod = order.PaymentMethod
 	} else if topup.PaymentMethod != order.PaymentMethod {
+		return ErrPaymentMethodMismatch
+	}
+	if topup.PaymentProvider == "" {
+		topup.PaymentProvider = order.PaymentProvider
+	} else if order.PaymentProvider != "" && topup.PaymentProvider != order.PaymentProvider {
 		return ErrPaymentMethodMismatch
 	}
 	if topup.CreateTime == 0 {

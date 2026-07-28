@@ -64,6 +64,12 @@ const BILLING_SECTIONS = [
           PreConsumedQuota: settings.PreConsumedQuota,
           QuotaForInviter: settings.QuotaForInviter,
           QuotaForInvitee: settings.QuotaForInvitee,
+          AffiliateUsageRebateEnabled:
+            settings.AffiliateUsageRebateEnabled ?? false,
+          AffiliateUsageRebateBps: settings.AffiliateUsageRebateBps ?? 0,
+          AffiliateUsageRebateGroup:
+            settings.AffiliateUsageRebateGroup ?? 'default',
+          AffiliateUsageRebateHour: settings.AffiliateUsageRebateHour ?? 0,
           TopUpLink: settings.TopUpLink,
           general_setting: {
             docs_link: settings['general_setting.docs_link'],
@@ -77,6 +83,7 @@ const BILLING_SECTIONS = [
           (settings['payment_setting.compliance_confirmed'] ?? false) &&
           settings['payment_setting.compliance_terms_version'] === 'v1'
         }
+        paidQuotaBillingGroup={settings.PaidQuotaBillingGroup}
       />
     ),
   },
