@@ -64,36 +64,36 @@ func estimateImageStudioBatchQuota(perImageQuota int, count uint) int {
 
 // estimateImageStudioPerImageQuota follows the same pricing path as execute-time
 // pre-consume, forced to n=1 so batch hold matches per-child billing.
-func estimateImageStudioPerImageQuota(c *gin.Context, imageRequest *dto.ImageRequest) (quota int, usingGroup string, err error) {
+func estimateImageStudioPerImageQuota(c *gin.Context, imageRequest *dto.ImageRequest) (quota int, usingGroup string, billingGroup string, err error) {
 	if imageRequest == nil {
-		return 0, "", fmt.Errorf("invalid image request")
+		return 0, "", "", fmt.Errorf("invalid image request")
 	}
 	one := uint(1)
 	imageRequest.N = &one
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatOpenAIImage, imageRequest, nil)
 	if err != nil {
-		return 0, "", err
+		return 0, "", "", err
 	}
 	relayInfo.InitChannelMeta(c)
 	billingInput, err := helper.BuildBillingExprRequestInputFromRequest(imageRequest, relayInfo.RequestHeaders)
 	if err != nil {
-		return 0, "", err
+		return 0, "", "", err
 	}
 	relayInfo.BillingRequestInput = &billingInput
 	meta := imageRequest.GetTokenCountMeta()
 	tokens, err := service.EstimateRequestToken(c, meta, relayInfo)
 	if err != nil {
-		return 0, "", err
+		return 0, "", "", err
 	}
 	relayInfo.SetEstimatePromptTokens(tokens)
 	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
 	if err != nil {
-		return 0, "", err
+		return 0, "", "", err
 	}
 	if priceData.QuotaToPreConsume < 0 {
-		return 0, relayInfo.UsingGroup, nil
+		return 0, relayInfo.UsingGroup, relayInfo.BillingGroup, nil
 	}
-	return priceData.QuotaToPreConsume, relayInfo.UsingGroup, nil
+	return priceData.QuotaToPreConsume, relayInfo.UsingGroup, relayInfo.BillingGroup, nil
 }
 
 // EstimateImageStudioCost follows the same pricing path used immediately
@@ -133,7 +133,7 @@ func EstimateImageStudioCost(c *gin.Context) {
 	} else {
 		c.Set("relay_mode", relayconstant.RelayModeImagesGenerations)
 	}
-	perImageQuota, usingGroup, err := estimateImageStudioPerImageQuota(c, imageRequest)
+	perImageQuota, usingGroup, _, err := estimateImageStudioPerImageQuota(c, imageRequest)
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
 		return
@@ -236,11 +236,15 @@ func CreateImageStudioTask(c *gin.Context) {
 
 	// Funding hold at submit so concurrent batches cannot oversell quota/subscription.
 	// Uses the same billing preference path as normal relay (subscription_first, etc.).
-	perImageQuota, _, err := estimateImageStudioPerImageQuota(c, imageRequest)
+	perImageQuota, usingGroup, billingGroup, err := estimateImageStudioPerImageQuota(c, imageRequest)
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
+	if usingGroup != "" {
+		relayInfo.UsingGroup = usingGroup
+	}
+	relayInfo.BillingGroup = billingGroup
 
 	batchID := ""
 	if imageCount > 1 {
