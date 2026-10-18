@@ -58,7 +58,26 @@ func AdjustUserQuota(userID, operatorRole int, mode string, value int) (*UserQuo
 		}
 		// An unchanged override is a successful operation, including on MySQL
 		// configurations that count only changed rows in RowsAffected.
-		if after != user.Quota {
+		if IsQuotaBucketBillingEnabled() {
+			if after < 0 {
+				return ErrQuotaBucketInsufficient
+			}
+			meta := QuotaBucketChargeMeta{RequestID: quotaBucketSourceID(QuotaBucketSourceAdmin, ""), BillingGroup: QuotaBucketBillingGroupDefault}
+			switch mode {
+			case "add":
+				if err := creditUserQuotaBucketTx(tx, userID, value, QuotaBucketSourceAdmin, meta.RequestID, meta.BillingGroup, true); err != nil {
+					return err
+				}
+			case "subtract":
+				if err := debitUserQuotaBucketsTx(tx, userID, value, meta, QuotaBucketTxnTypeAdjust, true, nil); err != nil {
+					return err
+				}
+			case "override":
+				if err := resetUserQuotaBucketsTx(tx, userID, after, QuotaBucketSourceAdmin, meta.RequestID, meta.BillingGroup); err != nil {
+					return err
+				}
+			}
+		} else if after != user.Quota {
 			result := tx.Model(&User{}).Where("id = ?", userID).Update("quota", after)
 			if result.Error != nil {
 				return result.Error

@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Crown, CalendarClock, Package } from 'lucide-react'
+import { Crown, CalendarClock, Package, Wallet } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -38,6 +38,7 @@ import {
   paySubscriptionEpay,
   paySubscriptionWaffoPancake,
   paySubscriptionBalance,
+  paySubscriptionWallet,
 } from '../../api'
 import { formatDuration, formatResetPeriod } from '../../lib'
 import type { PlanRecord } from '../../types'
@@ -59,6 +60,9 @@ interface Props {
   purchaseLimit?: number
   purchaseCount?: number
   userQuota?: number
+  enableWalletPurchase?: boolean
+  walletPaymentGroup?: string
+  walletBalance?: number
   onPurchaseSuccess?: () => void | Promise<void>
 }
 
@@ -85,7 +89,8 @@ export function SubscriptionPurchaseDialog(props: Props) {
     props.enableWaffoPancake && !!plan.waffo_pancake_product_id
   const hasEpay =
     props.enableOnlineTopUp && (props.epayMethods || []).length > 0
-  const hasAnyPayment = hasStripe || hasCreem || hasWaffoPancake || hasEpay
+  const hasWallet = !!props.enableWalletPurchase
+  const hasAnyPayment = hasWallet || hasStripe || hasCreem || hasWaffoPancake || hasEpay
   const totalAmount = Number(plan.total_amount || 0)
   const price = Number(plan.price_amount || 0).toFixed(2)
   const quotaPerUnit =
@@ -97,6 +102,8 @@ export function SubscriptionPurchaseDialog(props: Props) {
     Math.ceil(Number(plan.price_amount || 0) * quotaPerUnit)
   )
   const userQuota = Math.max(0, Number(props.userQuota || 0))
+  const walletPaymentGroup = props.walletPaymentGroup || 'VIP'
+  const walletBalance = Math.max(0, Number(props.walletBalance || 0))
   const allowBalancePay = plan.allow_balance_pay !== false
   const insufficientBalance = userQuota < balanceCost
   const limitReached =
@@ -224,6 +231,24 @@ export function SubscriptionPurchaseDialog(props: Props) {
     }
   }
 
+  const handlePayWallet = async () => {
+    setPaying(true)
+    try {
+      const res = await paySubscriptionWallet({ plan_id: plan.id })
+      if (res.success) {
+        toast.success(t('Subscription purchased successfully'))
+        void props.onPurchaseSuccess?.()
+        props.onOpenChange(false)
+      } else {
+        handleServerError(res, t('Payment request failed'))
+      }
+    } catch (error) {
+      handleServerError(error, t('Payment request failed'))
+    } finally {
+      setPaying(false)
+    }
+  }
+
   return (
     <Dialog
       open={props.open}
@@ -337,6 +362,25 @@ export function SubscriptionPurchaseDialog(props: Props) {
             <p className='text-muted-foreground text-xs'>
               {t('Select payment method')}
             </p>
+            {hasWallet && (
+              <div className='rounded-md border p-3'>
+                <div className='mb-2 flex items-center justify-between gap-2 text-xs'>
+                  <span className='text-muted-foreground'>
+                    {walletPaymentGroup} {t('Balance')}
+                  </span>
+                  <span>{formatQuota(walletBalance)}</span>
+                </div>
+                <Button
+                  className='w-full'
+                  variant='outline'
+                  onClick={handlePayWallet}
+                  disabled={paying || limitReached}
+                >
+                  <Wallet className='mr-2 h-4 w-4' />
+                  {t('Pay with')} {walletPaymentGroup} {t('Balance')}
+                </Button>
+              </div>
+            )}
             {(hasStripe || hasCreem || hasWaffoPancake) && (
               <div className='grid grid-cols-2 gap-2 sm:flex'>
                 {hasStripe && (

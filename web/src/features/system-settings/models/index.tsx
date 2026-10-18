@@ -63,6 +63,8 @@ const defaultModelSettings: ModelSettings = {
   AutoGroups: '',
   MaxTokenAutoGroups: 5,
   DefaultUseAutoGroup: false,
+  QuotaBucketBillingEnabled: false,
+  PaidQuotaBillingGroup: 'VIP',
   'group_ratio_setting.group_special_usable_group': '{}',
   'model_deployment.ionet.api_key': '',
   'model_deployment.ionet.enabled': false,

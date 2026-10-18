@@ -73,6 +73,8 @@ type GroupFormValues = {
   AutoGroups: string
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
+  QuotaBucketBillingEnabled: boolean
+  PaidQuotaBillingGroup: string
   GroupSpecialUsableGroup: string
 }
 
@@ -434,8 +436,55 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                 </SettingsSwitchItem>
               )}
             />
+
+
           </SettingsForm>
         )}
+        <SettingsForm onSubmit={form.handleSubmit(onSave)}>
+            <FormField
+              control={form.control}
+              name='QuotaBucketBillingEnabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>
+                      {t('Enable strict quota bucket billing')}
+                    </FormLabel>
+                    <FormDescription>
+                      {t(
+                        'When enabled, top-up and redemption quota enters the paid quota bucket.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='PaidQuotaBillingGroup'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Paid quota entitlement group')}</FormLabel>
+                  <FormControl>
+                    <Input placeholder='VIP' {...field} />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Top-up and redemption quota uses this group ratio. It must exactly match a key in the group ratio settings.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+        </SettingsForm>
       </Form>
     </div>
   )

@@ -286,8 +286,13 @@ func EstimateTaskSubmission(c *gin.Context, info *relaycommon.RelayInfo) (consta
 			}
 			return "", nil, service.TaskErrorWrapper(runErr, "model_price_error", http.StatusBadRequest, common.UpstreamAddresses(c)...)
 		}
+		helper.PrepareQuotaBucketBillingGroup(c, info)
 		groupRatioInfo := helper.HandleGroupRatio(c, info)
 		quota, clamp := common.QuotaRoundChecked(cost * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		if helper.FallbackQuotaBucketBillingGroup(c, info, quota) {
+			groupRatioInfo = helper.HandleGroupRatio(c, info)
+			quota, clamp = common.QuotaRoundChecked(cost * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		}
 		noteTaskQuotaClamp(info, clamp)
 		priceData = types.PriceData{Quota: quota, QuotaToPreConsume: quota, GroupRatioInfo: groupRatioInfo}
 		info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{BillingMode: billing_setting.BillingModeTieredExpr, ModelName: modelName, ExprString: exprStr, ExprHash: billingexpr.ExprHashString(exprStr), GroupRatio: groupRatioInfo.GroupRatio, EstimatedQuotaBeforeGroup: cost * common.QuotaPerUnit, EstimatedQuotaAfterGroup: quota, EstimatedTier: trace.MatchedTier, QuotaPerUnit: common.QuotaPerUnit, ExprVersion: billingexpr.ExprVersion(exprStr), TaskUsageBilling: true, UsageFacts: facts}
@@ -327,6 +332,24 @@ func EstimateTaskSubmission(c *gin.Context, info *relaycommon.RelayInfo) (consta
 		noteTaskQuotaClamp(info, clamp)
 	}
 
+	if info.TieredBillingSnapshot == nil && helper.FallbackQuotaBucketBillingGroup(c, info, info.PriceData.Quota) {
+		groupRatio := helper.HandleGroupRatio(c, info)
+		base := info.PriceData.ModelPrice
+		if !info.PriceData.UsePrice {
+			base = info.PriceData.ModelRatio / 2
+		}
+		quota, err := common.QuotaFromFloatStrict(base * common.QuotaPerUnit * groupRatio.GroupRatio)
+		if err != nil {
+			return "", nil, service.TaskErrorWrapperLocal(err, "model_price_error", http.StatusBadRequest)
+		}
+		info.PriceData.GroupRatioInfo = groupRatio
+		info.PriceData.Quota = quota
+		if !common.StringsContains(constant.TaskPricePatches, modelName) {
+			quota, clamp := common.QuotaFromFloatChecked(info.PriceData.ApplyOtherRatiosToFloat(float64(quota)))
+			info.PriceData.Quota = quota
+			noteTaskQuotaClamp(info, clamp)
+		}
+	}
 	return platform, adaptor, nil
 }
 

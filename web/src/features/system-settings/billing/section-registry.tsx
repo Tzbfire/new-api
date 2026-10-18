@@ -49,6 +49,8 @@ const getGroupDefaults = (settings: BillingSettings) => ({
   AutoGroups: settings.AutoGroups,
   MaxTokenAutoGroups: settings.MaxTokenAutoGroups,
   DefaultUseAutoGroup: settings.DefaultUseAutoGroup,
+  QuotaBucketBillingEnabled: settings.QuotaBucketBillingEnabled,
+  PaidQuotaBillingGroup: settings.PaidQuotaBillingGroup,
   GroupSpecialUsableGroup:
     settings['group_ratio_setting.group_special_usable_group'],
 })
@@ -63,6 +65,12 @@ const BILLING_SECTIONS = [
           QuotaForNewUser: settings.QuotaForNewUser,
           QuotaForInviter: settings.QuotaForInviter,
           QuotaForInvitee: settings.QuotaForInvitee,
+          AffiliateUsageRebateEnabled:
+            settings.AffiliateUsageRebateEnabled ?? false,
+          AffiliateUsageRebateBps: settings.AffiliateUsageRebateBps ?? 0,
+          AffiliateUsageRebateGroup:
+            settings.AffiliateUsageRebateGroup ?? 'default',
+          AffiliateUsageRebateHour: settings.AffiliateUsageRebateHour ?? 0,
           TopUpLink: settings.TopUpLink,
           quota_setting: {
             trust_quota_usd: settings['quota_setting.trust_quota_usd'],
@@ -76,6 +84,7 @@ const BILLING_SECTIONS = [
           (settings['payment_setting.compliance_confirmed'] ?? false) &&
           settings['payment_setting.compliance_terms_version'] === 'v1'
         }
+        paidQuotaBillingGroup={settings.PaidQuotaBillingGroup}
       />
     ),
   },

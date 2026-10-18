@@ -323,7 +323,10 @@ type UserSubscription struct {
 	EndTime   int64  `json:"end_time" gorm:"bigint;index;index:idx_user_sub_active,priority:3"`
 	Status    string `json:"status" gorm:"type:varchar(32);index;index:idx_user_sub_active,priority:2"` // active/expired/cancelled
 
-	Source string `json:"source" gorm:"type:varchar(32);default:'order'"` // order/admin
+	Source          string `json:"source" gorm:"type:varchar(32);default:'order'"` // order/admin/wallet/balance
+	PurchaseTradeNo string `json:"purchase_trade_no" gorm:"type:varchar(191);index;default:''"`
+	PaymentProvider string `json:"payment_provider" gorm:"type:varchar(50);default:''"`
+	PaymentMethod   string `json:"payment_method" gorm:"type:varchar(50);default:''"`
 
 	LastResetTime int64 `json:"last_reset_time" gorm:"type:bigint;default:0"`
 	NextResetTime int64 `json:"next_reset_time" gorm:"type:bigint;default:0;index"`
@@ -545,6 +548,10 @@ func downgradeUserGroupForSubscriptionTx(tx *gorm.DB, sub *UserSubscription, now
 }
 
 func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, source string) (*UserSubscription, error) {
+	return CreateUserSubscriptionFromPlanWithPurchaseTx(tx, userId, plan, source, "", "", "")
+}
+
+func CreateUserSubscriptionFromPlanWithPurchaseTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, source string, purchaseTradeNo string, paymentProvider string, paymentMethod string) (*UserSubscription, error) {
 	if tx == nil {
 		return nil, errors.New("tx is nil")
 	}
@@ -565,7 +572,7 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			return nil, common.NewMessage("Purchase limit for this plan has been reached")
 		}
 	}
-	nowUnix := GetDBTimestamp()
+	nowUnix := getDBTimestampTx(tx)
 	now := time.Unix(nowUnix, 0)
 	endUnix, err := calcPlanEndTime(now, plan)
 	if err != nil {
@@ -605,6 +612,9 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		EndTime:             endUnix,
 		Status:              "active",
 		Source:              source,
+		PurchaseTradeNo:     strings.TrimSpace(purchaseTradeNo),
+		PaymentProvider:     strings.TrimSpace(paymentProvider),
+		PaymentMethod:       strings.TrimSpace(paymentMethod),
 		LastResetTime:       lastReset,
 		NextResetTime:       nextReset,
 		UpgradeGroup:        upgradeGroup,
@@ -625,6 +635,149 @@ func refreshSubscriptionUserGroupCache(userId int, operation string) {
 	if err := RefreshUserGroupCache(userId); err != nil {
 		common.SysError(common.LogText("failed to refresh user group cache after %s for user %d: %v", operation, userId, err))
 	}
+}
+
+func updateUserBillingPreferenceToSubscriptionFirst(userId int) error {
+	if userId <= 0 {
+		return errors.New("invalid userId")
+	}
+	user, err := GetUserById(userId, true)
+	if err != nil {
+		return err
+	}
+	current := user.GetSetting()
+	normalized := common.NormalizeBillingPreference(current.BillingPreference)
+	if normalized == "subscription_first" || normalized == "subscription_only" {
+		return nil
+	}
+	current.BillingPreference = "subscription_first"
+	user.SetSetting(current)
+	if err := DB.Model(&User{}).Where("id = ?", userId).Update("setting", user.Setting).Error; err != nil {
+		return err
+	}
+	return updateUserCache(*user)
+}
+
+type SubscriptionWalletPurchaseResult struct {
+	TradeNo        string  `json:"trade_no"`
+	PlanId         int     `json:"plan_id"`
+	PlanTitle      string  `json:"plan_title"`
+	SubscriptionId int     `json:"subscription_id"`
+	PriceAmount    float64 `json:"price_amount"`
+	ChargedQuota   int     `json:"charged_quota"`
+	BillingGroup   string  `json:"billing_group"`
+}
+
+func subscriptionWalletChargeQuota(plan *SubscriptionPlan) (int, error) {
+	if plan == nil {
+		return 0, common.NewMessage("Subscription plan does not exist")
+	}
+	return calcSubscriptionBalanceQuota(plan.PriceAmount)
+}
+
+func PurchaseSubscriptionWithWallet(userId int, planId int) (*SubscriptionWalletPurchaseResult, error) {
+	if userId <= 0 || planId <= 0 {
+		return nil, common.NewMessage("Invalid parameters")
+	}
+	if !IsQuotaBucketBillingEnabled() {
+		return nil, common.NewMessage("VIP balance payment is not enabled")
+	}
+
+	billingGroup := GetPaidQuotaBillingGroup()
+	if billingGroup == QuotaBucketBillingGroupDefault {
+		return nil, common.NewMessage("Paid quota bucket group cannot be default")
+	}
+	now := common.GetTimestamp()
+	tradeNo := fmt.Sprintf("SUBWALLETUSR%dNO%d%s", userId, now, common.GetRandomString(8))
+	var plan *SubscriptionPlan
+	var chargedQuota int
+	var upgradeGroup string
+	result := &SubscriptionWalletPurchaseResult{TradeNo: tradeNo, BillingGroup: billingGroup}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		plan, err = getSubscriptionPlanByIdTx(tx, planId)
+		if err != nil {
+			return err
+		}
+		if !plan.Enabled {
+			return common.NewMessage("Subscription plan is not enabled")
+		}
+		if plan.AllowBalancePay != nil && !*plan.AllowBalancePay {
+			return common.NewMessage("This plan does not allow balance redemption")
+		}
+		chargedQuota, err = subscriptionWalletChargeQuota(plan)
+		if err != nil {
+			return err
+		}
+		result.PlanId, result.PlanTitle, result.PriceAmount, result.ChargedQuota = plan.Id, plan.Title, plan.PriceAmount, chargedQuota
+		if err := ensureUserQuotaBucketsMigratedTx(tx, userId); err != nil {
+			return err
+		}
+
+		meta := QuotaBucketChargeMeta{
+			RequestID:    tradeNo,
+			UsingGroup:   "subscription",
+			BillingGroup: billingGroup,
+			ModelName:    "subscription:" + plan.Title,
+		}
+		chargePlan := &QuotaBucketChargePlan{
+			UserId:       userId,
+			BillingGroup: billingGroup,
+			RequestID:    tradeNo,
+			PreConsumed:  chargedQuota,
+			Allocations:  make([]QuotaBucketAllocation, 0),
+		}
+		if err := debitUserQuotaBucketsTx(tx, userId, chargedQuota, meta, QuotaBucketTxnTypeSubPurchase, false, chargePlan); err != nil {
+			return err
+		}
+		sub, err := CreateUserSubscriptionFromPlanWithPurchaseTx(tx, userId, plan, "wallet", tradeNo, PaymentProviderBalance, PaymentMethodWallet)
+		if err != nil {
+			return err
+		}
+		if err := RecordAffiliateUsageRebateFromWalletPurchaseTx(tx, tradeNo, userId, billingGroup, chargedQuota); err != nil {
+			return err
+		}
+		order := &SubscriptionOrder{
+			UserId:          userId,
+			PlanId:          plan.Id,
+			Money:           plan.PriceAmount,
+			TradeNo:         tradeNo,
+			PaymentMethod:   PaymentMethodWallet,
+			PaymentProvider: PaymentProviderBalance,
+			Status:          common.TopUpStatusSuccess,
+			CreateTime:      now,
+			CompleteTime:    now,
+			ProviderPayload: common.GetJsonString(map[string]any{
+				"billing_group": billingGroup,
+				"charged_quota": chargedQuota,
+				"bucket_plan":   chargePlan,
+			}),
+		}
+		if err := tx.Create(order).Error; err != nil {
+			return err
+		}
+		if sub.PrevUserGroup != "" {
+			upgradeGroup = strings.TrimSpace(sub.UpgradeGroup)
+		}
+		result.SubscriptionId = sub.Id
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if err := cacheDecrUserQuota(userId, int64(chargedQuota)); err != nil {
+		common.SysError("failed to sync subscription wallet purchase cache: " + err.Error())
+	}
+	if upgradeGroup != "" {
+		refreshSubscriptionUserGroupCache(userId, common.LogText("subscription balance purchase"))
+	}
+	if err := updateUserBillingPreferenceToSubscriptionFirst(userId); err != nil {
+		common.SysLog("failed to update user billing preference after subscription wallet purchase: " + err.Error())
+	}
+	RecordLog(userId, LogTypeTopup, common.NewMessage("Subscription purchased with balance, plan: {{plan}}, payment amount: {{amount}}, quota deducted: {{quota}}", map[string]any{"plan": plan.Title, "amount": fmt.Sprintf("%.2f", plan.PriceAmount), "quota": chargedQuota}))
+
+	return result, nil
 }
 
 // Complete a subscription order (idempotent). Creates a UserSubscription snapshot from the plan.
@@ -670,13 +823,21 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		if err := lockForUpdate(tx).Select("id").Where("id = ?", order.UserId).First(&userRow).Error; err != nil {
 			return err
 		}
-		subscription, err := CreateUserSubscriptionFromPlanTx(tx, order.UserId, plan, "order")
+		paymentMethod := order.PaymentMethod
+		if actualPaymentMethod != "" {
+			paymentMethod = actualPaymentMethod
+		}
+		subscription, err := CreateUserSubscriptionFromPlanWithPurchaseTx(tx, order.UserId, plan, "order", order.TradeNo, order.PaymentProvider, paymentMethod)
 		if err != nil {
 			return err
 		}
 		if subscription.PrevUserGroup != "" {
 			upgradeGroup = strings.TrimSpace(subscription.UpgradeGroup)
 		}
+		if err := RecordAffiliateUsageRebateFromSubscriptionOrderPurchaseTx(tx, order.TradeNo, order.UserId, plan, order.PaymentProvider); err != nil {
+			return err
+		}
+		order.PaymentMethod = paymentMethod
 		if err := upsertSubscriptionTopUpTx(tx, &order); err != nil {
 			return err
 		}
@@ -684,9 +845,6 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		order.CompleteTime = common.GetTimestamp()
 		if providerPayload != "" {
 			order.ProviderPayload = providerPayload
-		}
-		if actualPaymentMethod != "" && order.PaymentMethod != actualPaymentMethod {
-			order.PaymentMethod = actualPaymentMethod
 		}
 		if err := tx.Save(&order).Error; err != nil {
 			return err
@@ -722,14 +880,15 @@ func upsertSubscriptionTopUpTx(tx *gorm.DB, order *SubscriptionOrder) error {
 	if err := tx.Where("trade_no = ?", order.TradeNo).First(&topup).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			topup = TopUp{
-				UserId:        order.UserId,
-				Amount:        0,
-				Money:         order.Money,
-				TradeNo:       order.TradeNo,
-				PaymentMethod: order.PaymentMethod,
-				CreateTime:    order.CreateTime,
-				CompleteTime:  now,
-				Status:        common.TopUpStatusSuccess,
+				UserId:          order.UserId,
+				Amount:          0,
+				Money:           order.Money,
+				TradeNo:         order.TradeNo,
+				PaymentMethod:   order.PaymentMethod,
+				PaymentProvider: order.PaymentProvider,
+				CreateTime:      order.CreateTime,
+				CompleteTime:    now,
+				Status:          common.TopUpStatusSuccess,
 			}
 			return tx.Create(&topup).Error
 		}
@@ -739,6 +898,11 @@ func upsertSubscriptionTopUpTx(tx *gorm.DB, order *SubscriptionOrder) error {
 	if topup.PaymentMethod == "" {
 		topup.PaymentMethod = order.PaymentMethod
 	} else if topup.PaymentMethod != order.PaymentMethod {
+		return ErrPaymentMethodMismatch
+	}
+	if topup.PaymentProvider == "" {
+		topup.PaymentProvider = order.PaymentProvider
+	} else if order.PaymentProvider != "" && topup.PaymentProvider != order.PaymentProvider {
 		return ErrPaymentMethodMismatch
 	}
 	if topup.CreateTime == 0 {
@@ -823,6 +987,10 @@ func calcSubscriptionBalanceQuota(priceAmount float64) (int, error) {
 func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 	if userId <= 0 || planId <= 0 {
 		return errors.New("invalid userId or planId")
+	}
+	if IsQuotaBucketBillingEnabled() {
+		_, err := PurchaseSubscriptionWithWallet(userId, planId)
+		return err
 	}
 
 	var logPlanTitle string

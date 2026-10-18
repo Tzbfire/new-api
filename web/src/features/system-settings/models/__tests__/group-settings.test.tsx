@@ -42,6 +42,8 @@ const defaults = {
   AutoGroups: '["default","vip"]',
   MaxTokenAutoGroups: 5,
   DefaultUseAutoGroup: false,
+  QuotaBucketBillingEnabled: false,
+  PaidQuotaBillingGroup: 'vip',
   GroupSpecialUsableGroup: '{}',
 }
 
@@ -53,6 +55,8 @@ const schema = z.object({
   AutoGroups: z.string(),
   MaxTokenAutoGroups: positiveIntegerSchema('Enter a positive integer'),
   DefaultUseAutoGroup: z.boolean(),
+  QuotaBucketBillingEnabled: z.boolean(),
+  PaidQuotaBillingGroup: z.string(),
   GroupSpecialUsableGroup: z.string(),
 })
 
@@ -79,6 +83,22 @@ function Fixture(props: {
 }
 
 describe('group settings workspace', () => {
+  it('keeps bucket billing settings editable across visual and JSON modes', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async (_values: typeof defaults) => {})
+    render(<Fixture onSave={onSave} />)
+    await user.click(screen.getByRole('switch', { name: 'Enable strict quota bucket billing' }))
+    const group = screen.getByRole('textbox', { name: 'Paid quota entitlement group' })
+    await user.clear(group)
+    await user.type(group, 'premium')
+    await user.click(screen.getByRole('button', { name: 'Switch to JSON' }))
+    expect(screen.getByRole('switch', { name: 'Enable strict quota bucket billing' })).toBeChecked()
+    expect(screen.getByRole('textbox', { name: 'Paid quota entitlement group' })).toHaveValue('premium')
+    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(onSave.mock.calls[0][0]).toMatchObject({ QuotaBucketBillingEnabled: true, PaidQuotaBillingGroup: 'premium' })
+  })
+
   it('filters by description and clears search without discarding edits', async () => {
     const user = userEvent.setup()
     render(<Fixture />)

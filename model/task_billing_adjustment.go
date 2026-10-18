@@ -29,7 +29,7 @@ type TaskBillingAdjustment struct {
 // ApplyTaskRefundTarget atomically moves the task's total refund to targetQuota.
 // It supports both positive corrections and charge-backs when a late final
 // settlement differs from an earlier timeout estimate.
-func ApplyTaskRefundTarget(taskID string, userID int, subscriptionID int, targetQuota int) (int, error) {
+func ApplyTaskRefundTarget(taskID string, userID int, subscriptionID int, targetQuota int, billingMeta ...QuotaBucketChargeMeta) (int, error) {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" || userID <= 0 || targetQuota < 0 {
 		return 0, errors.New("invalid task refund")
@@ -77,6 +77,17 @@ func ApplyTaskRefundTarget(taskID string, userID int, subscriptionID int, target
 				return errors.New("subscription refund adjustment exceeds total")
 			}
 			if err := tx.Save(&subscription).Error; err != nil {
+				return err
+			}
+		} else if IsQuotaBucketBillingEnabled() {
+			meta := QuotaBucketChargeMeta{RequestID: taskID, BillingGroup: QuotaBucketBillingGroupDefault}
+			if len(billingMeta) > 0 {
+				meta = billingMeta[0]
+			}
+			if meta.RequestID == "" {
+				meta.RequestID = taskID
+			}
+			if err := adjustTaskQuotaBucketsTx(tx, userID, meta, -appliedDelta); err != nil {
 				return err
 			}
 		} else {
@@ -198,7 +209,7 @@ func SettleImageStudioPluginTask(task *Task, targetQuota int, checkpoint []byte,
 		return errors.New("invalid image studio settlement")
 	}
 	// 缓存水合在事务外，避免单连接 SQLite 在锁任务后等待自身连接。
-	if common.RedisEnabled {
+	if common.RedisEnabled && !IsQuotaBucketBillingEnabled() {
 		_, _ = GetUserCache(task.UserId)
 	}
 	var stored Task
@@ -262,7 +273,7 @@ func SettleImageStudioPluginTask(task *Task, targetQuota int, checkpoint []byte,
 							return errors.New("wallet billing is disabled for this subscription group")
 						}
 					}
-					if common.RedisEnabled {
+					if common.RedisEnabled && !IsQuotaBucketBillingEnabled() {
 						result, err := cacheTryReserveUserQuota(stored.UserId, int64(delta))
 						if err != nil {
 							return err
@@ -278,16 +289,26 @@ func SettleImageStudioPluginTask(task *Task, targetQuota int, checkpoint []byte,
 						}
 					}
 				}
-				query := tx.Model(&User{}).Where("id = ?", stored.UserId)
-				if delta > 0 {
-					query = query.Where("quota >= ?", delta)
-				}
-				updated := query.Update("quota", gorm.Expr("quota - ?", delta))
-				if updated.Error != nil {
-					return updated.Error
-				}
-				if updated.RowsAffected != 1 {
-					return ErrInsufficientUserQuota
+				if IsQuotaBucketBillingEnabled() {
+					meta := QuotaBucketChargeMeta{RequestID: stored.PrivateData.RequestId, BillingGroup: stored.PrivateData.BillingGroup, UsingGroup: stored.Group, ModelName: stored.Properties.OriginModelName, TokenId: stored.PrivateData.TokenId, ChannelId: stored.ChannelId, LegacyPreConsumed: stored.Quota}
+					if meta.RequestID == "" {
+						meta.RequestID = stored.TaskID
+					}
+					if err := adjustTaskQuotaBucketsTx(tx, stored.UserId, meta, delta); err != nil {
+						return err
+					}
+				} else {
+					query := tx.Model(&User{}).Where("id = ?", stored.UserId)
+					if delta > 0 {
+						query = query.Where("quota >= ?", delta)
+					}
+					updated := query.Update("quota", gorm.Expr("quota - ?", delta))
+					if updated.Error != nil {
+						return updated.Error
+					}
+					if updated.RowsAffected != 1 {
+						return ErrInsufficientUserQuota
+					}
 				}
 			}
 		}
@@ -311,7 +332,7 @@ func SettleImageStudioPluginTask(task *Task, targetQuota int, checkpoint []byte,
 		}
 		return err
 	}
-	if delta < 0 && stored.PrivateData.BillingSource != "subscription" {
+	if (delta < 0 || IsQuotaBucketBillingEnabled() && delta > 0) && stored.PrivateData.BillingSource != "subscription" {
 		if err := cacheIncrUserQuota(stored.UserId, -int64(delta)); err != nil {
 			common.SysError("failed to sync studio settlement refund cache: " + err.Error())
 		}

@@ -89,10 +89,10 @@ func prepareImageStudioPlugin(c *gin.Context) (*pluginruntime.PinnedEndpoint, er
 }
 
 // estimateImageStudioPluginQuota validates a one-image copy without reserving funds.
-func estimateImageStudioPluginQuota(c *gin.Context, imageRequest *dto.ImageRequest) (int, string, bool, error) {
+func estimateImageStudioPluginQuota(c *gin.Context, imageRequest *dto.ImageRequest) (int, string, string, bool, error) {
 	generation := pluginruntime.DefaultRegistry.Generation()
 	if generation == nil {
-		return 0, "", false, nil
+		return 0, "", "", false, nil
 	}
 	path := "/v1/images/generations"
 	if c.GetInt("relay_mode") == relayconstant.RelayModeImagesEdits {
@@ -103,16 +103,16 @@ func estimateImageStudioPluginQuota(c *gin.Context, imageRequest *dto.ImageReque
 		modelName = alias.Declared
 	}
 	if _, found := generation.LookupEndpoint(http.MethodPost, path, modelName); !found {
-		return 0, "", false, nil
+		return 0, "", "", false, nil
 	}
 
 	storage, err := common.GetBodyStorage(c)
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", "", false, err
 	}
 	body, err := storage.Bytes()
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", "", false, err
 	}
 	bodyContext, _ := gin.CreateTestContext(httptest.NewRecorder())
 	bodyContext.Request = c.Request.Clone(c.Request.Context())
@@ -122,7 +122,7 @@ func estimateImageStudioPluginQuota(c *gin.Context, imageRequest *dto.ImageReque
 	bodyContext.Request.PostForm = nil
 	children, err := buildImageStudioTaskBodies(bodyContext, c.Request.Header.Get("Content-Type"), body, 1)
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", "", false, err
 	}
 	probe, _ := gin.CreateTestContext(httptest.NewRecorder())
 	probe.Keys = maps.Clone(c.Keys)
@@ -135,26 +135,26 @@ func estimateImageStudioPluginQuota(c *gin.Context, imageRequest *dto.ImageReque
 	probe.Request.Form = nil
 	bodyStorage, err := common.CreateBodyStorage(children[0].Body)
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", "", false, err
 	}
 	probe.Set(common.KeyBodyStorage, bodyStorage)
 	delete(probe.Keys, "_original_multipart_ct")
 	defer common.CleanupBodyStorage(probe)
 	pinned, err := prepareImageStudioPlugin(probe)
 	if err != nil || pinned == nil {
-		return 0, "", pinned != nil, err
+		return 0, "", "", pinned != nil, err
 	}
 	info, err := relaycommon.GenRelayInfo(probe, types.RelayFormatTask, nil, nil)
 	if err != nil {
-		return 0, "", true, err
+		return 0, "", "", true, err
 	}
 	info.OriginModelName = probe.GetString("resolved_task_model")
 	info.IsPlayground = true
 	_, _, taskErr := relay.EstimateTaskSubmission(probe, info)
 	if taskErr != nil {
-		return 0, "", true, errors.New(taskErr.Message)
+		return 0, "", "", true, errors.New(taskErr.Message)
 	}
-	return info.PriceData.Quota, info.UsingGroup, true, nil
+	return info.PriceData.Quota, info.UsingGroup, info.BillingGroup, true, nil
 }
 
 // persistImageStudioPluginSnapshot never changes lifecycle or billing columns.
@@ -215,6 +215,7 @@ func executeImageStudioPlugin(c *gin.Context, writer *imageStudioResponseWriter,
 		if taskErr != nil {
 			return true, errors.New(taskErr.Message)
 		}
+		info.BillingGroup = task.PrivateData.BillingGroup
 		info.BillingSource = task.PrivateData.BillingSource
 		info.SubscriptionId = task.PrivateData.SubscriptionId
 		persistImageStudioBillingSnapshot(task, info, task.Quota)
@@ -225,7 +226,7 @@ func executeImageStudioPlugin(c *gin.Context, writer *imageStudioResponseWriter,
 		if err := service.SettleImageStudioPluginTask(c, task, max(task.Quota, info.PriceData.Quota), checkpoint); err != nil {
 			return true, err
 		}
-		service.SetImageStudioPreheldBilling(c, service.ImageStudioPrehold{Quota: task.Quota, Source: task.PrivateData.BillingSource, SubscriptionId: task.PrivateData.SubscriptionId, RequestId: task.PrivateData.RequestId})
+		service.SetImageStudioPreheldBilling(c, service.ImageStudioPrehold{Quota: task.Quota, Source: task.PrivateData.BillingSource, BillingGroup: task.PrivateData.BillingGroup, SubscriptionId: task.PrivateData.SubscriptionId, RequestId: task.PrivateData.RequestId})
 		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
 			return true, apiErr
 		}
@@ -257,7 +258,7 @@ func executeImageStudioPlugin(c *gin.Context, writer *imageStudioResponseWriter,
 			info.TieredBillingSnapshot = billing.TieredSnapshot
 		}
 		if !snapshot.Settled {
-			service.SetImageStudioPreheldBilling(c, service.ImageStudioPrehold{Quota: task.Quota, Source: task.PrivateData.BillingSource, SubscriptionId: task.PrivateData.SubscriptionId, RequestId: task.PrivateData.RequestId})
+			service.SetImageStudioPreheldBilling(c, service.ImageStudioPrehold{Quota: task.Quota, Source: task.PrivateData.BillingSource, BillingGroup: task.PrivateData.BillingGroup, SubscriptionId: task.PrivateData.SubscriptionId, RequestId: task.PrivateData.RequestId})
 			if apiErr := service.PreConsumeBilling(c, task.Quota, info); apiErr != nil {
 				return true, apiErr
 			}

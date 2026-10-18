@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -63,6 +64,7 @@ const imageStudioPreheldQuotaKey = "image_studio_preheld_quota"
 type ImageStudioPrehold struct {
 	Quota          int
 	Source         string
+	BillingGroup   string
 	SubscriptionId int
 	RequestId      string
 }
@@ -87,6 +89,7 @@ func SetImageStudioPreheldBilling(c *gin.Context, hold ImageStudioPrehold) {
 		hold.Source = BillingSourceWallet
 	}
 	c.Set(imageStudioPreheldQuotaKey, hold)
+	c.Set(string(constant.ContextKeyQuotaBucketBillingGroup), hold.BillingGroup)
 }
 
 func imageStudioPreheld(c *gin.Context) (ImageStudioPrehold, bool) {
@@ -152,6 +155,7 @@ func PreHoldImageStudioBilling(c *gin.Context, relayInfo *relaycommon.RelayInfo,
 	hold := ImageStudioPrehold{
 		Quota:          session.GetPreConsumedQuota(),
 		Source:         relayInfo.BillingSource,
+		BillingGroup:   relayInfo.BillingGroup,
 		SubscriptionId: relayInfo.SubscriptionId,
 		RequestId:      relayInfo.RequestId,
 	}
@@ -234,7 +238,24 @@ func adoptImageStudioPreheldBilling(c *gin.Context, relayInfo *relaycommon.Relay
 		}
 		funding = subFunding
 	} else {
-		funding = &WalletFunding{userId: relayInfo.UserId, forceDB: true, consumed: held}
+		if hold.BillingGroup != "" {
+			relayInfo.BillingGroup = hold.BillingGroup
+		}
+		channelId := 0
+		if relayInfo.ChannelMeta != nil {
+			channelId = relayInfo.ChannelId
+		}
+		funding = &WalletFunding{
+			userId:       relayInfo.UserId,
+			requestId:    hold.RequestId,
+			billingGroup: hold.BillingGroup,
+			usingGroup:   relayInfo.UsingGroup,
+			modelName:    relayInfo.OriginModelName,
+			tokenId:      relayInfo.TokenId,
+			channelId:    channelId,
+			consumed:     held,
+			forceDB:      true,
+		}
 	}
 
 	session := &BillingSession{
@@ -282,6 +303,9 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 			return err
 		}
 		notifyBillingSettlementObserver(ctx, relayInfo, actualQuota)
+		if err := recordSynchronousAffiliateRebate(relayInfo, actualQuota); err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("record affiliate usage rebate failed: %v", err))
+		}
 
 		// 发送额度通知（订阅计费使用订阅剩余额度）
 		if actualQuota != 0 {
@@ -302,6 +326,9 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 		}
 	}
 	notifyBillingSettlementObserver(ctx, relayInfo, actualQuota)
+	if err := recordSynchronousAffiliateRebate(relayInfo, actualQuota); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("record affiliate usage rebate failed: %v", err))
+	}
 	return nil
 }
 
@@ -319,4 +346,11 @@ func SettleImageStudioPluginTask(c *gin.Context, task *model.Task, actualQuota i
 		return fmt.Errorf("image studio plugin checkpoint is missing")
 	}
 	return model.SettleImageStudioPluginTask(task, actualQuota, checkpointData, checkpoint.Plugin.Settled)
+}
+
+func recordSynchronousAffiliateRebate(info *relaycommon.RelayInfo, quota int) error {
+	if info.RelayFormat == types.RelayFormatTask {
+		return nil
+	}
+	return model.RecordAffiliateUsageRebateFromBilling(info.RequestId, info.UserId, info.BillingSource, info.BillingGroup, info.SubscriptionId, quota)
 }

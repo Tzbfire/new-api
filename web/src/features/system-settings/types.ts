@@ -272,6 +272,8 @@ export type ModelSettings = {
   AutoGroups: string
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
+  QuotaBucketBillingEnabled: boolean
+  PaidQuotaBillingGroup: string
   'group_ratio_setting.group_special_usable_group': string
   'model_deployment.ionet.api_key': string
   'model_deployment.ionet.enabled': boolean
@@ -281,6 +283,10 @@ export type BillingSettings = {
   QuotaForNewUser: number
   QuotaForInviter: number
   QuotaForInvitee: number
+  AffiliateUsageRebateEnabled: boolean
+  AffiliateUsageRebateBps: number
+  AffiliateUsageRebateGroup: string
+  AffiliateUsageRebateHour: number
   TopUpLink: string
   'quota_setting.enable_free_model_pre_consume': boolean
   'quota_setting.trust_quota_usd': number
@@ -312,6 +318,8 @@ export type BillingSettings = {
   AutoGroups: string
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
+  QuotaBucketBillingEnabled: boolean
+  PaidQuotaBillingGroup: string
   'group_ratio_setting.group_special_usable_group': string
   PayAddress: string
   EpayId: string

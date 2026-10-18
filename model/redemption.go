@@ -174,6 +174,9 @@ func Redeem(key string, userId int) (quota int, err error) {
 		if result.RowsAffected == 0 {
 			return errors.New("redemption code already used")
 		}
+		if IsQuotaBucketBillingEnabled() {
+			return creditUserQuotaBucketTx(tx, userId, redemption.Quota, QuotaBucketSourceRedemption, fmt.Sprintf("%d", redemption.Id), GetPaidQuotaBillingGroup(), true)
+		}
 		return creditTopUpQuota(tx, userId, redemption.Quota, nil)
 	})
 	if err != nil {
