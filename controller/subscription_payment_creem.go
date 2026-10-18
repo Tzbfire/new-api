@@ -113,7 +113,7 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 	}
 	product := &CreemProduct{
 		ProductId: plan.CreemProductId,
-		Name:      plan.Title,
+		Name:      fmt.Sprintf("TUC%.2f", plan.PriceAmount),
 		Price:     plan.PriceAmount,
 		Currency:  currency,
 		Quota:     0,

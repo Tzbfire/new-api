@@ -237,13 +237,12 @@ func ListWaffoPancakeCatalog(c *gin.Context) {
 }
 
 type createWaffoPancakeSubscriptionProductRequest struct {
-	Name   string `json:"name"`
 	Amount string `json:"amount"`
 }
 
 // CreateWaffoPancakeSubscriptionProduct mints an OnetimeProduct (not
 // SubscriptionProduct — see service.CreateWaffoPancakeProductForPlan)
-// sized to a plan's `name` + `amount`, using persisted Pancake credentials
+// sized to a plan's `amount`, using a price-based name and persisted Pancake credentials
 // + StoreID. Reads from the form, not the plan row, so newly-typed unsaved
 // plans can mint a product too.
 func CreateWaffoPancakeSubscriptionProduct(c *gin.Context) {
@@ -253,10 +252,6 @@ func CreateWaffoPancakeSubscriptionProduct(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
 			return
 		}
-	}
-	if strings.TrimSpace(req.Name) == "" {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "套餐名称不能为空"})
-		return
 	}
 	if strings.TrimSpace(req.Amount) == "" {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "套餐价格不能为空"})
@@ -268,19 +263,18 @@ func CreateWaffoPancakeSubscriptionProduct(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "Waffo Pancake 未完成配置，请先在支付设置中完成网关绑定"})
 		return
 	}
-	productID, err := service.CreateWaffoPancakeProductForPlan(
+	productID, productName, err := service.CreateWaffoPancakeProductForPlan(
 		c.Request.Context(),
 		merchantID,
 		privateKey,
 		storeID,
-		req.Name,
 		req.Amount,
 		setting.WaffoPancakeReturnURL,
 	)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf(
-			"Waffo Pancake 创建套餐产品失败 store_id=%q name=%q amount=%q error=%q",
-			storeID, req.Name, req.Amount, err.Error(),
+			"Waffo Pancake 创建套餐产品失败 store_id=%q amount=%q error=%q",
+			storeID, req.Amount, err.Error(),
 		))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建套餐产品失败"})
 		return
@@ -289,7 +283,7 @@ func CreateWaffoPancakeSubscriptionProduct(c *gin.Context) {
 		"message": "success",
 		"data": gin.H{
 			"product_id":   productID,
-			"product_name": req.Name,
+			"product_name": productName,
 			"store_id":     storeID,
 		},
 	})

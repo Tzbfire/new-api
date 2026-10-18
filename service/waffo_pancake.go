@@ -3,10 +3,13 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/shopspring/decimal"
 	pancake "github.com/waffo-com/waffo-pancake-sdk-go"
 )
 
@@ -278,26 +281,27 @@ func CreateWaffoPancakePrimaryStore(ctx context.Context, merchantID, privateKey 
 // OnetimeProduct (not SubscriptionProduct) because new-api has no renewal-
 // event handling; Pancake auto-renewing without new-api extending user
 // access would be a UX divergence. Revisit if renewal handling is added.
-func CreateWaffoPancakeProductForPlan(ctx context.Context, merchantID, privateKey, storeID, name, amount, returnURL string) (string, error) {
+func CreateWaffoPancakeProductForPlan(ctx context.Context, merchantID, privateKey, storeID, amount, returnURL string) (string, string, error) {
 	storeID = strings.TrimSpace(storeID)
 	if storeID == "" {
-		return "", fmt.Errorf("store id is required to create a product")
+		return "", "", fmt.Errorf("store id is required to create a product")
 	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "", fmt.Errorf("plan name is required")
+	price, err := strconv.ParseFloat(strings.TrimSpace(amount), 64)
+	if err != nil || price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+		return "", "", fmt.Errorf("plan price must be a positive finite amount")
 	}
-	amount = strings.TrimSpace(amount)
-	if amount == "" {
-		return "", fmt.Errorf("plan price is required")
+	amount = decimal.NewFromFloat(price).StringFixed(2)
+	if amount == "0.00" {
+		return "", "", fmt.Errorf("plan price must be at least 0.01")
 	}
+	productName := "TUC" + amount
 	client, err := newWaffoPancakeClientFromCreds(merchantID, privateKey)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	prodRes, err := client.OnetimeProducts.Create(ctx, pancake.CreateOnetimeProductParams{
 		StoreID: storeID,
-		Name:    name,
+		Name:    productName,
 		Prices: pancake.Prices{
 			"USD": {
 				Amount:      amount,
@@ -307,13 +311,13 @@ func CreateWaffoPancakeProductForPlan(ctx context.Context, merchantID, privateKe
 		SuccessURL: optionalString(strings.TrimSpace(returnURL)),
 	})
 	if err != nil {
-		return "", fmt.Errorf("create Waffo Pancake plan product: %w", err)
+		return "", "", fmt.Errorf("create Waffo Pancake plan product: %w", err)
 	}
 	productID := prodRes.Product.ID
 	if _, err := client.OnetimeProducts.Publish(ctx, pancake.PublishOnetimeProductParams{ID: productID}); err != nil {
-		return "", fmt.Errorf("publish Waffo Pancake plan product: %w", err)
+		return "", "", fmt.Errorf("publish Waffo Pancake plan product: %w", err)
 	}
-	return productID, nil
+	return productID, productName, nil
 }
 
 // CreateWaffoPancakePrimaryProduct mints (and publishes) the wallet-top-up
