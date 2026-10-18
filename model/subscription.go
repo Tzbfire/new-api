@@ -730,7 +730,7 @@ func PurchaseSubscriptionWithWallet(userId int, planId int) (*SubscriptionWallet
 		if err := debitUserQuotaBucketsTx(tx, userId, chargedQuota, meta, QuotaBucketTxnTypeSubPurchase, false, chargePlan); err != nil {
 			return err
 		}
-		sub, err := CreateUserSubscriptionFromPlanWithPurchaseTx(tx, userId, plan, "wallet", tradeNo, PaymentProviderBalance, PaymentMethodWallet)
+		sub, err := CreateUserSubscriptionFromPlanWithPurchaseTx(tx, userId, plan, "wallet", tradeNo, PaymentProviderBalance, PaymentMethodBalance)
 		if err != nil {
 			return err
 		}
@@ -742,7 +742,7 @@ func PurchaseSubscriptionWithWallet(userId int, planId int) (*SubscriptionWallet
 			PlanId:          plan.Id,
 			Money:           plan.PriceAmount,
 			TradeNo:         tradeNo,
-			PaymentMethod:   PaymentMethodWallet,
+			PaymentMethod:   PaymentMethodBalance,
 			PaymentProvider: PaymentProviderBalance,
 			Status:          common.TopUpStatusSuccess,
 			CreateTime:      now,

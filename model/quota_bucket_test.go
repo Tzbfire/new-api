@@ -116,7 +116,7 @@ func TestPurchaseSubscriptionWithWalletUsesPaidBucketOnly(t *testing.T) {
 
 	var order SubscriptionOrder
 	require.NoError(t, DB.Where("trade_no = ?", result.TradeNo).First(&order).Error)
-	assert.Equal(t, PaymentMethodWallet, order.PaymentMethod)
+	assert.Equal(t, PaymentMethodBalance, order.PaymentMethod)
 	assert.Equal(t, common.TopUpStatusSuccess, order.Status)
 }
 
@@ -147,7 +147,7 @@ func TestPurchaseSubscriptionWithBalanceDelegatesToPaidBucketWhenBucketBillingEn
 
 	var order SubscriptionOrder
 	require.NoError(t, DB.Where("user_id = ?", 305).First(&order).Error)
-	assert.Equal(t, PaymentMethodWallet, order.PaymentMethod)
+	assert.Equal(t, PaymentMethodBalance, order.PaymentMethod)
 	assert.Equal(t, common.TopUpStatusSuccess, order.Status)
 }
 

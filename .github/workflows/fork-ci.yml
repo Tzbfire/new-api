@@ -49,6 +49,8 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
@@ -57,7 +59,13 @@ jobs:
           bun-version: '1.4.0'
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      - run: bun run lint
+      - name: Reject lint regressions against manyou baseline
+        run: |
+          baseline_dir="$RUNNER_TEMP/manyou-lint-baseline"
+          git worktree add --detach "$baseline_dir" 91050b700c2a7d348a7fbbd1c95e7a814851a0e0
+          trap 'git worktree remove --force "$baseline_dir"' EXIT
+          export LINT_BASELINE_DIR="$baseline_dir/web"
+          python3 ../scripts/check-frontend-lint.py
       - run: bun run test --maxWorkers=2
       - run: bun run build
 

@@ -4,6 +4,16 @@ set -euo pipefail
 legacy_checkout="${RUNNER_TEMP:?}/newapi-before-rc45"
 git worktree add --detach "$legacy_checkout" 4915bb7fe2b0b0346b8b470221a5352e47784577
 trap 'git worktree remove --force "$legacy_checkout"' EXIT
+# The old revision redundantly names the task index twice. MySQL cannot
+# create that schema from scratch; normalize only that metadata in the fixture.
+python3 - "$legacy_checkout/model/image_studio_batch.go" <<'PYFIX'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+s = p.read_text()
+assert 'gorm:"uniqueIndex;index;not null"' in s
+p.write_text(s.replace('gorm:"uniqueIndex;index;not null"', 'gorm:"uniqueIndex;not null"'))
+PYFIX
 cat > "$legacy_checkout/model/merge_upgrade_fixture_test.go" <<'GO'
 package model
 
