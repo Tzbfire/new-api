@@ -124,7 +124,7 @@ jobs:
       - name: Verify startup twice and preserve old balances
         run: go test ./model -run '^TestQuotaBucketStartupMigrationCompatibility$' -count=1
       - name: Verify bucket accounting and affiliate rebates
-        run: go test ./model -run 'Test(QuotaBucket|CreditUserQuotaBucket|DebitUserQuotaBuckets|PurchaseSubscriptionWithWallet|PurchaseSubscriptionWithBalanceDelegates|AffiliateUsageRebate)' -count=1
+        run: NEWAPI_TEST_MODE= go test ./model -run 'Test(QuotaBucket|CreditUserQuotaBucket|DebitUserQuotaBuckets|PurchaseSubscriptionWithWallet|PurchaseSubscriptionWithBalanceDelegates|AffiliateUsageRebate)' -count=1
 
   container:
     if: (github.repository == 'manyou116/new-api' || github.repository == 'Tzbfire/new-api')

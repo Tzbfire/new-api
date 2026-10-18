@@ -6,13 +6,18 @@ git worktree add --detach "$legacy_checkout" 4915bb7fe2b0b0346b8b470221a5352e477
 trap 'git worktree remove --force "$legacy_checkout"' EXIT
 # The old revision redundantly names the task index twice. MySQL cannot
 # create that schema from scratch; normalize only that metadata in the fixture.
-python3 - "$legacy_checkout/model/image_studio_batch.go" <<'PYFIX'
+python3 - "$legacy_checkout/model/image_studio_batch.go" "$legacy_checkout/model/main.go" <<'PYFIX'
 from pathlib import Path
 import sys
 p = Path(sys.argv[1])
 s = p.read_text()
 assert 'gorm:"uniqueIndex;index;not null"' in s
 p.write_text(s.replace('gorm:"uniqueIndex;index;not null"', 'gorm:"uniqueIndex;not null"'))
+# Match the newer revision's quoting of MySQL's reserved option key column.
+p = Path(sys.argv[2])
+s = p.read_text()
+assert 'tx.Where("key = ?", markerKey)' in s
+p.write_text(s.replace('tx.Where("key = ?", markerKey)', 'tx.Where(commonKeyCol+" = ?", markerKey)'))
 PYFIX
 cat > "$legacy_checkout/model/merge_upgrade_fixture_test.go" <<'GO'
 package model
