@@ -2061,8 +2061,8 @@ func TestTaskAffiliateRebateWaitsForSuccessfulCompletion(t *testing.T) {
 		setting.QuotaBucketBillingEnabled, setting.PaidQuotaBillingGroup = oldBucket, oldPaid
 		setting.AffiliateUsageRebateEnabled, setting.AffiliateUsageRebateBps = oldEnabled, oldBps
 	})
-	require.NoError(t, model.DB.Create(&model.User{Id: 901, Username: "rebate-inviter", Status: common.UserStatusEnabled}).Error)
-	require.NoError(t, model.DB.Create(&model.User{Id: 902, Username: "rebate-invitee", Status: common.UserStatusEnabled, InviterId: 901}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 901, Username: "rebate-inviter", AffCode: "rebate-901", Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 902, Username: "rebate-invitee", AffCode: "rebate-902", Status: common.UserStatusEnabled, InviterId: 901}).Error)
 	for _, requestID := range []string{"rebate-success", "rebate-failure"} {
 		require.NoError(t, model.CreditUserQuotaBucket(902, 100, model.QuotaBucketSourceTopup, requestID, "vip"))
 		_, err := model.DebitUserQuotaBuckets(902, 100, model.QuotaBucketChargeMeta{RequestID: requestID, BillingGroup: "vip"}, model.QuotaBucketTxnTypePreConsume)

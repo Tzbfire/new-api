@@ -222,7 +222,7 @@ func TestQuotaBucketStudioSettlementAndRefundStayInOriginalBucket(t *testing.T) 
 	withQuotaBucketBilling(t)
 	insertQuotaBucketUser(t, 312, 50)
 	withAffiliateUsageRebate(t, 1000, QuotaBucketBillingGroupDefault)
-	require.NoError(t, DB.Create(&User{Id: 912, Username: "studio-inviter", Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, DB.Create(&User{Id: 912, Username: "studio-inviter", AffCode: "studio-inviter", Status: common.UserStatusEnabled}).Error)
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", 312).Update("inviter_id", 912).Error)
 	require.NoError(t, CreditUserQuotaBucket(312, 100, QuotaBucketSourceTopup, "studio-credit", "vip"))
 	meta := QuotaBucketChargeMeta{RequestID: "studio-hold", BillingGroup: "vip"}

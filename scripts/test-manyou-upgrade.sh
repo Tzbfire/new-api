@@ -16,8 +16,8 @@ p.write_text(s.replace('gorm:"uniqueIndex;index;not null"', 'gorm:"uniqueIndex;n
 # Match the newer revision's quoting of MySQL's reserved option key column.
 p = Path(sys.argv[2])
 s = p.read_text()
-assert 'tx.Where("key = ?", markerKey)' in s
-p.write_text(s.replace('tx.Where("key = ?", markerKey)', 'tx.Where(commonKeyCol+" = ?", markerKey)'))
+assert s.count('Where("key = ?", markerKey)') == 3
+p.write_text(s.replace('Where("key = ?", markerKey)', 'Where(commonKeyCol+" = ?", markerKey)'))
 PYFIX
 cat > "$legacy_checkout/model/merge_upgrade_fixture_test.go" <<'GO'
 package model
