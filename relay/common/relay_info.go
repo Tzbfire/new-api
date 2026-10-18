@@ -510,6 +510,11 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		info.RequestURLPath = strings.TrimPrefix(info.RequestURLPath, "/pg")
 		info.RequestURLPath = "/v1" + info.RequestURLPath
 	}
+	// Durable Image Studio workers rebuild requests on /v1/... with a virtual
+	// token (TokenId=0). They must skip real token quota reads/writes.
+	if c.GetBool("durable_async_billing") {
+		info.IsPlayground = true
+	}
 
 	userSetting, ok := common.GetContextKeyType[dto.UserSetting](c, constant.ContextKeyUserSetting)
 	if ok {

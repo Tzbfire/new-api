@@ -107,6 +107,13 @@ const CONTENT_SECTIONS = [
       <DrawingSettingsSection
         defaultValues={{
           DrawingEnabled: settings.DrawingEnabled,
+          ImageStudioBatchConcurrency: settings.ImageStudioBatchConcurrency,
+          ImageStudioDownloadAllEnabled: settings.ImageStudioDownloadAllEnabled,
+          ImageStudioTaskTimeoutMinutes: settings.ImageStudioTaskTimeoutMinutes,
+          ImageStudioRetentionDays: settings.ImageStudioRetentionDays,
+          ImageStudioBaseURL: settings.ImageStudioBaseURL,
+          ImageStudioPromptPresets: settings.ImageStudioPromptPresets,
+          ImageStudioSizePresets: settings.ImageStudioSizePresets,
           MjNotifyEnabled: settings.MjNotifyEnabled,
           MjAccountFilterEnabled: settings.MjAccountFilterEnabled,
           MjForwardUrlEnabled: settings.MjForwardUrlEnabled,

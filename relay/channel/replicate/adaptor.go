@@ -255,6 +255,9 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	}
 
 	if wantsBase64 {
+		if c.GetBool(string(constant.ContextKeyImageStudioStrictB64)) {
+			return nil, types.NewError(errors.New("replicate adaptor: provider returned URL-only images while Image Studio requires Base64"), types.ErrorCodeBadResponse)
+		}
 		converted, convErr := downloadImagesToBase64(urls)
 		if convErr != nil {
 			return nil, types.NewError(convErr, types.ErrorCodeBadResponse)

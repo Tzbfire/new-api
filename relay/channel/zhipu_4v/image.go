@@ -1,10 +1,12 @@
 package zhipu_4v
 
 import (
+	"errors"
 	"io"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -97,6 +99,9 @@ func zhipu4vImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		case data.B64Image != "":
 			b64 = data.B64Image
 		default:
+			if c.GetBool(string(constant.ContextKeyImageStudioStrictB64)) {
+				return nil, types.NewError(errors.New("zhipu image response contains URL-only data while Image Studio requires Base64"), types.ErrorCodeBadResponse)
+			}
 			_, downloaded, err := service.GetImageFromUrl(url)
 			if err != nil {
 				logger.LogError(c, "zhipu_image_get_b64_failed: "+err.Error())

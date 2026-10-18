@@ -155,6 +155,32 @@ func TestUpdateVideoTasksDefaultSleepWaitsBetweenTasks(t *testing.T) {
 	assert.Equal(t, 1, adaptor.fetchCount())
 }
 
+func TestProviderTaskPollingLeavesImageStudioToDedicatedRecovery(t *testing.T) {
+	truncate(t)
+	const userID = 901
+	const chargedQuota = 400
+	seedUser(t, userID, 1000)
+	task := makeTask(userID, 0, chargedQuota, 0, BillingSourceWallet, 0)
+	task.TaskID = "task_image_studio_timeout"
+	task.Platform = constant.TaskPlatformImageStudio
+	task.Progress = "10%"
+	task.SubmitTime = time.Now().Add(-2 * time.Hour).Unix()
+	require.NoError(t, model.DB.Create(task).Error)
+
+	previousTimeout := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 60
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = previousTimeout })
+	assert.False(t, model.HasUnfinishedSyncTasks())
+	assert.Empty(t, model.GetAllUnFinishSyncTasks(100))
+	sweepTimedOutTasks(context.Background())
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusInProgress), reloaded.Status)
+	assert.Equal(t, "10%", reloaded.Progress)
+	assert.Equal(t, 1000, getUserQuota(t, userID))
+}
+
 func TestUpdateVideoTasksCanSkipPollingSleepPerChannel(t *testing.T) {
 	truncate(t)
 

@@ -66,9 +66,9 @@ func Path2RelayMode(path string) int {
 		relayMode = RelayModeEmbeddings
 	} else if strings.HasPrefix(path, "/v1/moderations") {
 		relayMode = RelayModeModerations
-	} else if strings.HasPrefix(path, "/v1/images/generations") {
+	} else if strings.HasPrefix(path, "/v1/images/generations") || strings.HasPrefix(path, "/pg/images/generations") || strings.HasPrefix(path, "/pg/image-studio/generations") {
 		relayMode = RelayModeImagesGenerations
-	} else if strings.HasPrefix(path, "/v1/images/edits") {
+	} else if strings.HasPrefix(path, "/v1/images/edits") || strings.HasPrefix(path, "/pg/images/edits") || strings.HasPrefix(path, "/pg/image-studio/edits") {
 		relayMode = RelayModeImagesEdits
 	} else if strings.HasPrefix(path, "/v1/edits") {
 		relayMode = RelayModeEdits
@@ -92,6 +92,25 @@ func Path2RelayMode(path string) int {
 		relayMode = Path2RelayModeMidjourney(path)
 	}
 	return relayMode
+}
+
+// NormalizeRequestPath maps browser-session Image Studio endpoints to the
+// canonical OpenAI image paths used by channel capability filtering.
+func NormalizeRequestPath(path string) string {
+	switch {
+	case strings.HasPrefix(path, "/pg/image-studio/estimate"):
+		return "/v1/images/generations"
+	case strings.HasPrefix(path, "/pg/image-studio/generations"):
+		return strings.Replace(path, "/pg/image-studio/generations", "/v1/images/generations", 1)
+	case strings.HasPrefix(path, "/pg/images/generations"):
+		return strings.Replace(path, "/pg/images/generations", "/v1/images/generations", 1)
+	case strings.HasPrefix(path, "/pg/image-studio/edits"):
+		return strings.Replace(path, "/pg/image-studio/edits", "/v1/images/edits", 1)
+	case strings.HasPrefix(path, "/pg/images/edits"):
+		return strings.Replace(path, "/pg/images/edits", "/v1/images/edits", 1)
+	default:
+		return path
+	}
 }
 
 func Path2RelayModeMidjourney(path string) int {

@@ -122,6 +122,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
 	}
+	if service.UsesDurableAsyncBilling(c) {
+		relayInfo.ForcePreConsume = true
+	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
@@ -171,7 +174,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		// Only return quota if downstream failed and quota was actually pre-consumed
 		if newAPIError != nil {
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
-			if relayInfo.Billing != nil {
+			if relayInfo.Billing != nil && !service.UsesDurableAsyncBilling(c) {
 				relayInfo.Billing.Refund(c)
 			}
 			service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError)
@@ -182,7 +185,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		Ctx:         c,
 		TokenGroup:  relayInfo.TokenGroup,
 		ModelName:   relayInfo.OriginModelName,
-		RequestPath: c.Request.URL.Path,
+		RequestPath: relayconstant.NormalizeRequestPath(c.Request.URL.Path),
 		Retry:       common.GetPointer(0),
 	}
 	relayInfo.RetryIndex = 0
@@ -190,6 +193,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
+		if resetter, ok := c.Writer.(interface {
+			BeginImageStudioResponseAttempt() error
+		}); ok {
+			if err := resetter.BeginImageStudioResponseAttempt(); err != nil {
+				newAPIError = types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+				break
+			}
+		}
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())

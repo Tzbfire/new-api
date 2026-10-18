@@ -12,6 +12,13 @@ import (
 
 var timeFormat = "2006-01-02T15:04:05.000Z"
 
+const (
+	imageStudioEstimateRateLimitNum      = 120
+	imageStudioEstimateRateLimitDuration = 60
+	imageStudioSubmitRateLimitNum        = 30
+	imageStudioSubmitRateLimitDuration   = 60
+)
+
 var inMemoryRateLimiter common.InMemoryRateLimiter
 
 var defNext = func(c *gin.Context) {
@@ -106,6 +113,19 @@ func CriticalRateLimit() func(c *gin.Context) {
 		return rateLimitFactory(common.CriticalRateLimitNum, common.CriticalRateLimitDuration, "CT")
 	}
 	return defNext
+}
+
+// ImageStudioEstimateRateLimit isolates interactive price previews from
+// security-sensitive operations and from task submissions. UserAuth must run
+// before this middleware.
+func ImageStudioEstimateRateLimit() func(c *gin.Context) {
+	return userRateLimitFactory(imageStudioEstimateRateLimitNum, imageStudioEstimateRateLimitDuration, "ISE")
+}
+
+// ImageStudioSubmitRateLimit protects task creation without allowing prompt
+// edits and price previews to consume the same quota. UserAuth must run first.
+func ImageStudioSubmitRateLimit() func(c *gin.Context) {
+	return userRateLimitFactory(imageStudioSubmitRateLimitNum, imageStudioSubmitRateLimitDuration, "ISS")
 }
 
 func DownloadRateLimit() func(c *gin.Context) {

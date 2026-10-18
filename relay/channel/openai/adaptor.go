@@ -41,6 +41,8 @@ type Adaptor struct {
 	ResponseFormat string
 }
 
+func (a *Adaptor) SupportsImageStudioStreaming() bool { return true }
+
 func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
 	// 使用 service.GeminiToOpenAIRequest 转换请求格式
 	openaiRequest, err := service.GeminiToOpenAIRequest(request, info)

@@ -150,9 +150,29 @@ func authHelper(c *gin.Context, minRole int) {
 	c.Set("username", username)
 	c.Set("role", role)
 	c.Set("id", id)
-	c.Set("group", session.Get("group"))
-	c.Set("user_group", session.Get("group"))
 	c.Set("use_access_token", useAccessToken)
+
+	// Prefer DB/cache group over session so subscription upgrade/downgrade
+	// takes effect without forcing the user to log in again.
+	group := ""
+	if userID, ok := id.(int); ok && userID > 0 {
+		if userCache, cacheErr := model.GetUserCache(userID); cacheErr == nil && userCache != nil {
+			group = userCache.Group
+			if !useAccessToken {
+				if sessionGroup, _ := session.Get("group").(string); sessionGroup != group {
+					session.Set("group", group)
+					_ = session.Save()
+				}
+			}
+		}
+	}
+	if group == "" {
+		if sessionGroup, ok := session.Get("group").(string); ok {
+			group = sessionGroup
+		}
+	}
+	c.Set("group", group)
+	c.Set("user_group", group)
 
 	// 管理/root 写操作审计兜底：内聚在鉴权链路里，保证任何经过 AdminAuth/RootAuth
 	// 的写接口都会自动留痕（无需在路由上单独挂审计中间件，避免漏挂）。

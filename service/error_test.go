@@ -150,6 +150,19 @@ func TestRelayErrorHandlerKeepsInvalidJSONBodyInDebugLog(t *testing.T) {
 	require.Contains(t, logBuffer.String(), body)
 }
 
+func TestRelayErrorHandlerWithLimitRejectsOversizedBody(t *testing.T) {
+	const limit = 1024
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", limit+1))),
+	}
+
+	newAPIError := RelayErrorHandlerWithLimit(context.Background(), resp, false, limit)
+
+	require.NotNil(t, newAPIError)
+	require.ErrorContains(t, newAPIError, "body exceeds 1024 bytes")
+}
+
 func withDebugEnabled(t *testing.T, enabled bool) {
 	t.Helper()
 

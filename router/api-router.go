@@ -1,6 +1,8 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
 
@@ -14,7 +16,20 @@ import (
 func SetApiRouter(router *gin.Engine) {
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"))
-	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
+	// Image Studio assets and ZIP exports are already-compressed binary streams.
+	// Re-gzipping them adds CPU/memory pressure and can break long downloads when
+	// they pass through Nginx/CDN buffering, so keep those paths byte-for-byte.
+	apiRouter.Use(gzip.Gzip(
+		gzip.DefaultCompression,
+		gzip.WithExcludedPaths([]string{
+			"/api/image-studio/assets",
+			"/api/image-studio/library/download",
+			"/api/task/image-studio/download",
+		}),
+		gzip.WithExcludedPathsRegexs([]string{
+			`^/api/image-studio/batches/[^/]+/download$`,
+		}),
+	))
 	apiRouter.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	anonymousRequestBodyLimit := middleware.AnonymousRequestBodyLimit()
@@ -32,6 +47,41 @@ func SetApiRouter(router *gin.Engine) {
 		//apiRouter.GET("/midjourney", controller.GetMidjourney)
 		apiRouter.GET("/home_page_content", controller.GetHomePageContent)
 		apiRouter.GET("/pricing", middleware.HeaderNavModuleAuth("pricing"), controller.GetPricing)
+		imageStudioLibraryRoute := apiRouter.Group("/image-studio/library")
+		imageStudioLibraryRoute.Use(middleware.UserAuth())
+		{
+			imageStudioLibraryRoute.GET("/tasks", controller.ListImageStudioLibraryTasks)
+			imageStudioLibraryRoute.DELETE("/failed", controller.DeleteImageStudioLibraryFailures)
+			imageStudioLibraryRoute.DELETE("", controller.DeleteImageStudioLibrary)
+		}
+		// Native browser downloads cannot attach New-Api-User, so ZIP exports use
+		// session-or-token auth and still enforce ownership inside each handler.
+		apiRouter.GET("/image-studio/library/download", middleware.TokenOrUserAuth(), controller.DownloadImageStudioLibrary)
+
+		imageStudioBatchRoute := apiRouter.Group("/image-studio/batches")
+		imageStudioBatchRoute.Use(middleware.UserAuth())
+		{
+			imageStudioBatchRoute.GET("", controller.ListImageStudioBatches)
+			imageStudioBatchRoute.GET("/:batch_id", controller.GetImageStudioBatch)
+			imageStudioBatchRoute.GET("/:batch_id/tasks", controller.ListImageStudioBatchTasks)
+			imageStudioBatchRoute.DELETE("/:batch_id/failed", controller.DeleteImageStudioBatchFailures)
+			imageStudioBatchRoute.DELETE("/:batch_id", controller.DeleteImageStudioBatch)
+		}
+		apiRouter.GET("/image-studio/batches/:batch_id/download", middleware.TokenOrUserAuth(), controller.DownloadImageStudioBatch)
+		imageStudioAssetRoute := apiRouter.Group("/image-studio/assets")
+		imageStudioAssetRoute.Use(middleware.PublicAssetCORS())
+		{
+			imageStudioAssetRoute.GET("/:asset_id/:expires/:signature", controller.GetPublicImageStudioAsset)
+			imageStudioAssetRoute.HEAD("/:asset_id/:expires/:signature", controller.GetPublicImageStudioAsset)
+			imageStudioAssetRoute.GET("/:asset_id/:expires/:signature/download", controller.GetPublicImageStudioAsset)
+			imageStudioAssetRoute.HEAD("/:asset_id/:expires/:signature/download", controller.GetPublicImageStudioAsset)
+			imageStudioAssetRoute.OPTIONS("/:asset_id/:expires/:signature", func(c *gin.Context) {
+				c.Status(http.StatusNoContent)
+			})
+			imageStudioAssetRoute.OPTIONS("/:asset_id/:expires/:signature/download", func(c *gin.Context) {
+				c.Status(http.StatusNoContent)
+			})
+		}
 		perfMetricsRoute := apiRouter.Group("/perf-metrics")
 		perfMetricsRoute.Use(middleware.HeaderNavModulePublicOrUserAuth("pricing"))
 		{
@@ -148,6 +198,7 @@ func SetApiRouter(router *gin.Engine) {
 		}
 
 		// Subscription billing (plans, purchase, admin management)
+		apiRouter.GET("/subscription/public-plans", middleware.HeaderNavModuleAuth("pricing"), controller.GetPublicSubscriptionPlans)
 		subscriptionRoute := apiRouter.Group("/subscription")
 		subscriptionRoute.Use(middleware.UserAuth())
 		{
@@ -325,6 +376,12 @@ func SetApiRouter(router *gin.Engine) {
 		taskRoute := apiRouter.Group("/task")
 		{
 			taskRoute.GET("/self", middleware.UserAuth(), controller.GetUserTask)
+			taskRoute.DELETE("/image-studio", middleware.UserAuth(), controller.DeleteUserImageStudioTasks)
+			taskRoute.GET("/image-studio/download", middleware.TokenOrUserAuth(), controller.DownloadImageStudioTaskImages)
+			// Native <img>/<a> requests cannot attach the dashboard's New-Api-User
+			// header, so content uses session-or-token auth and then enforces task
+			// ownership again inside the handler.
+			taskRoute.GET("/image-studio/:task_id/images/:index/content", middleware.TokenOrUserAuth(), controller.GetImageStudioTaskImage)
 			taskRoute.GET("/", middleware.AdminAuth(), controller.GetAllTask)
 		}
 

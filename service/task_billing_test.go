@@ -3,22 +3,55 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+type billingObserverTestSession struct {
+	settleErr error
+	preQuota  int
+}
+
+func (session *billingObserverTestSession) Settle(int) error         { return session.settleErr }
+func (session *billingObserverTestSession) Refund(*gin.Context)      {}
+func (session *billingObserverTestSession) NeedsRefund() bool        { return false }
+func (session *billingObserverTestSession) GetPreConsumedQuota() int { return session.preQuota }
+func (session *billingObserverTestSession) Reserve(int) error        { return nil }
+
+func TestSettleBillingOnlyNotifiesObserverAfterSuccessfulSettlement(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	notifications := 0
+	SetBillingSettlementObserver(ctx, func(_ *relaycommon.RelayInfo, _ int) {
+		notifications++
+	})
+	info := &relaycommon.RelayInfo{Billing: &billingObserverTestSession{settleErr: errors.New("settlement failed"), preQuota: 100}}
+
+	require.Error(t, SettleBilling(ctx, info, 0))
+	assert.Zero(t, notifications)
+
+	info.Billing = &billingObserverTestSession{preQuota: 100}
+	require.NoError(t, SettleBilling(ctx, info, 0))
+	assert.Equal(t, 1, notifications)
+}
 
 func TestMain(m *testing.M) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -41,12 +74,18 @@ func TestMain(m *testing.M) {
 
 	if err := db.AutoMigrate(
 		&model.Task{},
+		&model.ImageStudioBatch{},
+		&model.ImageStudioBatchItem{},
+		&model.ImageStudioAsset{},
+		&model.TaskBillingAdjustment{},
 		&model.User{},
 		&model.Token{},
 		&model.Log{},
 		&model.Channel{},
 		&model.TopUp{},
+		&model.SubscriptionPlan{},
 		&model.UserSubscription{},
+		&model.SubscriptionPreConsumeRecord{},
 		&model.SystemTask{},
 		&model.SystemTaskLock{},
 	); err != nil {
@@ -63,13 +102,19 @@ func TestMain(m *testing.M) {
 func truncate(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
+		model.DB.Exec("DELETE FROM image_studio_batch_items")
+		model.DB.Exec("DELETE FROM image_studio_batches")
 		model.DB.Exec("DELETE FROM tasks")
+		model.DB.Exec("DELETE FROM image_studio_assets")
+		model.DB.Exec("DELETE FROM task_billing_adjustments")
 		model.DB.Exec("DELETE FROM users")
 		model.DB.Exec("DELETE FROM tokens")
 		model.DB.Exec("DELETE FROM logs")
 		model.DB.Exec("DELETE FROM channels")
 		model.DB.Exec("DELETE FROM top_ups")
 		model.DB.Exec("DELETE FROM user_subscriptions")
+		model.DB.Exec("DELETE FROM subscription_plans")
+		model.DB.Exec("DELETE FROM subscription_pre_consume_records")
 		model.DB.Exec("DELETE FROM system_task_locks")
 		model.DB.Exec("DELETE FROM system_tasks")
 	})
@@ -97,9 +142,20 @@ func seedToken(t *testing.T, id int, userId int, key string, remainQuota int) {
 
 func seedSubscription(t *testing.T, id int, userId int, amountTotal int64, amountUsed int64) {
 	t.Helper()
+	planID := id
+	plan := &model.SubscriptionPlan{
+		Id:            planID,
+		Title:         fmt.Sprintf("plan-%d", planID),
+		DurationUnit:  model.SubscriptionDurationMonth,
+		DurationValue: 1,
+		TotalAmount:   amountTotal,
+		Enabled:       true,
+	}
+	require.NoError(t, model.DB.Create(plan).Error)
 	sub := &model.UserSubscription{
 		Id:          id,
 		UserId:      userId,
+		PlanId:      planID,
 		AmountTotal: amountTotal,
 		AmountUsed:  amountUsed,
 		Status:      "active",
@@ -390,6 +446,35 @@ func TestRefundTaskQuota_NoToken(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
+}
+
+func TestBackfillTaskBillingFromConsumeLog(t *testing.T) {
+	truncate(t)
+	const userID = 905
+	seedUser(t, userID, 1000)
+	logEntry := &model.Log{
+		UserId:    userID,
+		CreatedAt: time.Now().Unix(),
+		Type:      model.LogTypeConsume,
+		ModelName: "gpt-image-1",
+		Quota:     321,
+		ChannelId: 17,
+		TokenId:   23,
+		Group:     "vip",
+		RequestId: "req_image_studio_backfill",
+		Other:     `{"billing_source":"subscription","subscription_id":29}`,
+	}
+	require.NoError(t, model.LOG_DB.Create(logEntry).Error)
+
+	task := &model.Task{TaskID: "task_image_backfill", UserId: userID}
+	assert.True(t, BackfillTaskBillingFromConsumeLog(context.Background(), task, logEntry.RequestId))
+	assert.Equal(t, 321, task.Quota)
+	assert.Equal(t, 17, task.ChannelId)
+	assert.Equal(t, 23, task.PrivateData.TokenId)
+	assert.Equal(t, "vip", task.Group)
+	assert.Equal(t, "gpt-image-1", task.Properties.OriginModelName)
+	assert.Equal(t, BillingSourceSubscription, task.PrivateData.BillingSource)
+	assert.Equal(t, 29, task.PrivateData.SubscriptionId)
 }
 
 // ===========================================================================
@@ -816,4 +901,95 @@ func TestSettle_NonPerCallBilling_AppliesAdaptorAdjustment(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
+}
+
+func TestAdoptImageStudioPreheldBillingDoesNotDoubleDebit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	truncate(t)
+	const userID = 920
+	seedUser(t, userID, 1000)
+
+	// Mirror submit-time wallet hold.
+	require.NoError(t, model.DecreaseUserQuotaIfEnough(userID, 200))
+	assert.Equal(t, 800, getUserQuota(t, userID))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	SetImageStudioPreheldQuota(ctx, 200)
+	info := &relaycommon.RelayInfo{UserId: userID, RequestId: "req_preheld", IsPlayground: true}
+	require.Nil(t, PreConsumeBilling(ctx, 999, info))
+	require.NotNil(t, info.Billing)
+	assert.Equal(t, 200, info.Billing.GetPreConsumedQuota())
+	assert.Equal(t, 800, getUserQuota(t, userID), "preheld path must not debit again")
+
+	require.NoError(t, SettleBilling(ctx, info, 150))
+	assert.Equal(t, 850, getUserQuota(t, userID), "settle returns unused hold so net charge is actual")
+}
+
+func TestPreHoldImageStudioBillingPrefersSubscription(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	truncate(t)
+
+	const userID, subID = 921, 921
+	const walletQuota = 5000
+	const holdQuota = 200
+	seedUser(t, userID, walletQuota)
+	seedSubscription(t, subID, userID, 10000, 0)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		UserId:       userID,
+		RequestId:    "studio-sub-hold",
+		UsingGroup:   "default",
+		UserSetting:  dto.UserSetting{BillingPreference: "subscription_first"},
+		IsPlayground: true,
+	}
+
+	hold, apiErr := PreHoldImageStudioBilling(ctx, info, holdQuota)
+	require.Nil(t, apiErr)
+	assert.Equal(t, holdQuota, hold.Quota)
+	assert.Equal(t, BillingSourceSubscription, hold.Source)
+	assert.Equal(t, subID, hold.SubscriptionId)
+	assert.Equal(t, walletQuota, getUserQuota(t, userID), "subscription hold must not touch wallet")
+	assert.EqualValues(t, holdQuota, getSubscriptionUsed(t, subID))
+
+	SetImageStudioPreheldBilling(ctx, hold)
+	info.Billing = nil
+	require.Nil(t, PreConsumeBilling(ctx, 999, info))
+	assert.Equal(t, BillingSourceSubscription, info.BillingSource)
+	assert.EqualValues(t, holdQuota, getSubscriptionUsed(t, subID), "adopt must not pre-consume again")
+
+	require.NoError(t, SettleBilling(ctx, info, 150))
+	assert.EqualValues(t, 150, getSubscriptionUsed(t, subID))
+	assert.Equal(t, walletQuota, getUserQuota(t, userID))
+}
+
+func TestAdoptImageStudioSubscriptionPreholdSettlesWithoutTokenLookup(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	truncate(t)
+
+	const userID, subID = 922, 922
+	seedUser(t, userID, 100)
+	seedSubscription(t, subID, userID, 5000, 300)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	SetDurableAsyncBilling(ctx)
+	SetImageStudioPreheldBilling(ctx, ImageStudioPrehold{
+		Quota:          300,
+		Source:         BillingSourceSubscription,
+		SubscriptionId: subID,
+		RequestId:      "studio-adopt-sub",
+	})
+
+	info := &relaycommon.RelayInfo{
+		UserId:       userID,
+		RequestId:    "studio-adopt-sub",
+		TokenId:      0,
+		TokenKey:     "",
+		IsPlayground: false, // worker path historically lost this flag
+	}
+	require.Nil(t, PreConsumeBilling(ctx, 999, info))
+	require.NotNil(t, info.Billing)
+	assert.Equal(t, BillingSourceSubscription, info.BillingSource)
+	assert.Equal(t, 300, info.Billing.GetPreConsumedQuota())
+	assert.EqualValues(t, 300, getSubscriptionUsed(t, subID), "adopt must not debit subscription again")
 }

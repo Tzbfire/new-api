@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -23,6 +24,26 @@ import (
 // (generations/edits), returning the parsed usage for billing.
 func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
+	if c.GetBool(string(constant.ContextKeyImageStudioStrictB64)) {
+		if capture, ok := c.Writer.(interface {
+			CaptureImageStudioResponse(*http.Response) ([]byte, error)
+		}); ok {
+			responseBody, err := capture.CaptureImageStudioResponse(resp)
+			if err != nil {
+				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			}
+			var usageResp dto.SimpleResponse
+			if err := common.Unmarshal(responseBody, &usageResp); err != nil {
+				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			}
+			if oaiError := usageResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
+				return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+			}
+			normalizeOpenAIUsage(&usageResp.Usage)
+			applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
+			return &usageResp.Usage, nil
+		}
+	}
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
