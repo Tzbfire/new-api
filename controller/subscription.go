@@ -19,6 +19,26 @@ type SubscriptionPlanDTO struct {
 	Plan model.SubscriptionPlan `json:"plan"`
 }
 
+// PublicSubscriptionPlanDTO is the deliberately small, anonymous-facing plan
+// contract used by the landing page. Payment-provider identifiers and
+// administrative lifecycle fields must never be added here.
+type PublicSubscriptionPlanDTO struct {
+	Id                      int     `json:"id"`
+	Title                   string  `json:"title"`
+	Subtitle                string  `json:"subtitle"`
+	PriceAmount             float64 `json:"price_amount"`
+	Currency                string  `json:"currency"`
+	DurationUnit            string  `json:"duration_unit"`
+	DurationValue           int     `json:"duration_value"`
+	CustomSeconds           int64   `json:"custom_seconds"`
+	TotalAmount             int64   `json:"total_amount"`
+	QuotaResetPeriod        string  `json:"quota_reset_period"`
+	QuotaResetCustomSeconds int64   `json:"quota_reset_custom_seconds"`
+	UpgradeGroup            string  `json:"upgrade_group"`
+	AllowedTokenGroups      string  `json:"allowed_token_groups"`
+	AllowWalletOverflow     bool    `json:"allow_wallet_overflow"`
+}
+
 type BillingPreferenceRequest struct {
 	BillingPreference string `json:"billing_preference"`
 }
@@ -28,6 +48,41 @@ type SubscriptionBalancePayRequest struct {
 }
 
 // ---- User APIs ----
+
+func GetPublicSubscriptionPlans(c *gin.Context) {
+	if !operation_setting.IsPaymentComplianceConfirmed() {
+		common.ApiSuccess(c, []PublicSubscriptionPlanDTO{})
+		return
+	}
+
+	var plans []model.SubscriptionPlan
+	if err := model.DB.Where("enabled = ?", true).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	result := make([]PublicSubscriptionPlanDTO, 0, len(plans))
+	for index := range plans {
+		plan := &plans[index]
+		plan.NormalizeDefaults()
+		result = append(result, PublicSubscriptionPlanDTO{
+			Id:                      plan.Id,
+			Title:                   plan.Title,
+			Subtitle:                plan.Subtitle,
+			PriceAmount:             plan.PriceAmount,
+			Currency:                plan.Currency,
+			DurationUnit:            plan.DurationUnit,
+			DurationValue:           plan.DurationValue,
+			CustomSeconds:           plan.CustomSeconds,
+			TotalAmount:             plan.TotalAmount,
+			QuotaResetPeriod:        plan.QuotaResetPeriod,
+			QuotaResetCustomSeconds: plan.QuotaResetCustomSeconds,
+			UpgradeGroup:            plan.UpgradeGroup,
+			AllowedTokenGroups:      plan.AllowedTokenGroups,
+			AllowWalletOverflow:     *plan.AllowWalletOverflow,
+		})
+	}
+	common.ApiSuccess(c, result)
+}
 
 func GetSubscriptionPlans(c *gin.Context) {
 	if !operation_setting.IsPaymentComplianceConfirmed() {
@@ -138,6 +193,36 @@ type AdminUpsertSubscriptionPlanRequest struct {
 	Plan model.SubscriptionPlan `json:"plan"`
 }
 
+func normalizeSubscriptionTokenGroups(value string) (string, error) {
+	normalized := model.NormalizeAllowedTokenGroups(value)
+	groupRatios := ratio_setting.GetGroupRatioCopy()
+	for _, group := range model.ParseAllowedTokenGroups(normalized) {
+		if group == "auto" {
+			continue
+		}
+		if _, exists := groupRatios[group]; !exists {
+			return "", fmt.Errorf("允许使用分组不存在: %s", group)
+		}
+	}
+	return normalized, nil
+}
+
+// defaultPlanWalletOverflow sets AllowWalletOverflow when omitted.
+// Group-scoped plans default to false so package ratios do not silently fall
+// onto wallet billing; unscoped plans keep the legacy disable_wallet_fallback mapping.
+func defaultPlanWalletOverflow(plan *model.SubscriptionPlan, allowedTokenGroups string) {
+	if plan.AllowWalletOverflow != nil {
+		plan.DisableWalletFallback = !*plan.AllowWalletOverflow
+		return
+	}
+	if allowedTokenGroups != "" {
+		plan.AllowWalletOverflow = common.GetPointer(false)
+	} else {
+		plan.AllowWalletOverflow = common.GetPointer(!plan.DisableWalletFallback)
+	}
+	plan.DisableWalletFallback = !*plan.AllowWalletOverflow
+}
+
 func AdminCreateSubscriptionPlan(c *gin.Context) {
 	if !requirePaymentCompliance(c) {
 		return
@@ -168,9 +253,13 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 	if req.Plan.AllowBalancePay == nil {
 		req.Plan.AllowBalancePay = common.GetPointer(true)
 	}
-	if req.Plan.AllowWalletOverflow == nil {
-		req.Plan.AllowWalletOverflow = common.GetPointer(true)
+	allowedTokenGroups, err := normalizeSubscriptionTokenGroups(req.Plan.AllowedTokenGroups)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
 	}
+	req.Plan.AllowedTokenGroups = allowedTokenGroups
+	defaultPlanWalletOverflow(&req.Plan, allowedTokenGroups)
 	if req.Plan.DurationUnit == "" {
 		req.Plan.DurationUnit = model.SubscriptionDurationMonth
 	}
@@ -204,7 +293,7 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
 		return
 	}
-	err := model.DB.Create(&req.Plan).Error
+	err = model.DB.Create(&req.Plan).Error
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -259,6 +348,13 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "总额度不能为负数")
 		return
 	}
+	allowedTokenGroups, err := normalizeSubscriptionTokenGroups(req.Plan.AllowedTokenGroups)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	req.Plan.AllowedTokenGroups = allowedTokenGroups
+	defaultPlanWalletOverflow(&req.Plan, allowedTokenGroups)
 	req.Plan.UpgradeGroup = strings.TrimSpace(req.Plan.UpgradeGroup)
 	if req.Plan.UpgradeGroup != "" {
 		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
@@ -279,7 +375,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		return
 	}
 
-	err := model.DB.Transaction(func(tx *gorm.DB) error {
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		// update plan (allow zero values updates with map)
 		updateMap := map[string]interface{}{
 			"title":                      req.Plan.Title,
@@ -298,6 +394,8 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"total_amount":               req.Plan.TotalAmount,
 			"upgrade_group":              req.Plan.UpgradeGroup,
 			"downgrade_group":            req.Plan.DowngradeGroup,
+			"allowed_token_groups":       req.Plan.AllowedTokenGroups,
+			"disable_wallet_fallback":    req.Plan.DisableWalletFallback,
 			"quota_reset_period":         req.Plan.QuotaResetPeriod,
 			"quota_reset_custom_seconds": req.Plan.QuotaResetCustomSeconds,
 			"updated_at":                 common.GetTimestamp(),
@@ -310,6 +408,20 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		}
 		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Updates(updateMap).Error; err != nil {
 			return err
+		}
+		// Active subscriptions keep purchase-time snapshots; push overflow +
+		// group scope when the admin updates the plan so the switch takes effect.
+		if req.Plan.AllowWalletOverflow != nil {
+			now := common.GetTimestamp()
+			if err := tx.Model(&model.UserSubscription{}).
+				Where("plan_id = ? AND status = ? AND end_time > ?", id, "active", now).
+				Updates(map[string]interface{}{
+					"allow_wallet_overflow": *req.Plan.AllowWalletOverflow,
+					"allowed_token_groups":  req.Plan.AllowedTokenGroups,
+					"updated_at":            now,
+				}).Error; err != nil {
+				return err
+			}
 		}
 		return nil
 	})

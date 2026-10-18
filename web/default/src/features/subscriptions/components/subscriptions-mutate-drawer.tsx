@@ -31,6 +31,7 @@ import {
   sideDrawerHeaderClassName,
   sideDrawerSwitchItemClassName,
 } from '@/components/drawer-layout'
+import { MultiSelect } from '@/components/multi-select'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -119,7 +120,9 @@ export function SubscriptionsMutateDrawer({
       }
       getGroups()
         .then((res) => {
-          if (res.success) setGroupOptions(res.data || [])
+          if (res.success) {
+            setGroupOptions([...new Set(['auto', ...(res.data || [])])])
+          }
         })
         .catch(() => {})
       // Best-effort — empty list still lets the operator use "+ Create".
@@ -144,6 +147,8 @@ export function SubscriptionsMutateDrawer({
 
   const durationUnit = form.watch('duration_unit')
   const resetPeriod = form.watch('quota_reset_period')
+  const allowedTokenGroups = form.watch('allowed_token_groups')
+  const isGroupScoped = (allowedTokenGroups?.length ?? 0) > 0
   // Gate "+ Create on Pancake" on the same checks the mint handler runs.
   const watchedTitle = form.watch('title')
   const watchedPrice = form.watch('price_amount')
@@ -179,15 +184,10 @@ export function SubscriptionsMutateDrawer({
   }
 
   // Mints a Pancake OnetimeProduct (not SubscriptionProduct — see
-  // controller) using persisted creds + the form's title/price, then
+  // controller) using persisted creds + the form's price, then
   // pins the returned PROD_ ID into the form field.
   const handleCreatePancakeProduct = async () => {
-    const title = form.getValues('title').trim()
     const priceAmount = Number(form.getValues('price_amount') || 0)
-    if (!title) {
-      toast.error(t('Plan title is required'))
-      return
-    }
     if (priceAmount <= 0) {
       toast.error(t('Plan price must be greater than zero'))
       return
@@ -195,7 +195,6 @@ export function SubscriptionsMutateDrawer({
     setCreatingPancakeProduct(true)
     try {
       const res = await createWaffoPancakeSubscriptionProduct({
-        name: title,
         amount: priceAmount.toFixed(2),
       })
       if (
@@ -203,7 +202,10 @@ export function SubscriptionsMutateDrawer({
         typeof res.data === 'object' &&
         res.data
       ) {
-        const created = res.data as { product_id: string; product_name: string }
+        const created = res.data as {
+          product_id: string
+          product_name: string
+        }
         form.setValue('waffo_pancake_product_id', created.product_id, {
           shouldDirty: true,
         })
@@ -328,7 +330,9 @@ export function SubscriptionsMutateDrawer({
                           step='0.01'
                           min={0}
                           onChange={(e) =>
-                            field.onChange(parseFloat(e.target.value) || 0)
+                            field.onChange(
+                              Number.parseFloat(e.target.value) || 0
+                            )
                           }
                         />
                       </FormControl>
@@ -364,7 +368,9 @@ export function SubscriptionsMutateDrawer({
                                 })
                           }
                           onChange={(e) =>
-                            field.onChange(parseFloat(e.target.value) || 0)
+                            field.onChange(
+                              Number.parseFloat(e.target.value) || 0
+                            )
                           }
                         />
                       </FormControl>
@@ -480,7 +486,9 @@ export function SubscriptionsMutateDrawer({
                           type='number'
                           min={0}
                           onChange={(e) =>
-                            field.onChange(parseInt(e.target.value, 10) || 0)
+                            field.onChange(
+                              Number.parseInt(e.target.value, 10) || 0
+                            )
                           }
                         />
                       </FormControl>
@@ -495,6 +503,33 @@ export function SubscriptionsMutateDrawer({
 
               <FormField
                 control={form.control}
+                name='allowed_token_groups'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Subscription Token Groups')}</FormLabel>
+                    <FormControl>
+                      <MultiSelect
+                        options={groupOptions.map((group) => ({
+                          value: group,
+                          label: group,
+                        }))}
+                        selected={field.value}
+                        onChange={field.onChange}
+                        placeholder={t('All groups')}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Leave empty to allow this subscription in all token groups'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
                 name='sort_order'
                 render={({ field }) => (
                   <FormItem>
@@ -504,7 +539,9 @@ export function SubscriptionsMutateDrawer({
                         {...field}
                         type='number'
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value, 10) || 0)
+                          field.onChange(
+                            Number.parseInt(e.target.value, 10) || 0
+                          )
                         }
                       />
                     </FormControl>
@@ -564,6 +601,13 @@ export function SubscriptionsMutateDrawer({
                           onCheckedChange={field.onChange}
                         />
                       </FormControl>
+                      {isGroupScoped ? (
+                        <FormDescription>
+                          {t(
+                            'Group-scoped plans default wallet fallback off; enable only if wallet billing at the wallet group ratio is intended after package quota is used up'
+                          )}
+                        </FormDescription>
+                      ) : null}
                     </FormItem>
                   )}
                 />
@@ -585,12 +629,10 @@ export function SubscriptionsMutateDrawer({
                     <FormItem>
                       <FormLabel>{t('Duration Unit')}</FormLabel>
                       <Select
-                        items={[
-                          ...durationUnitOpts.map((o) => ({
-                            value: o.value,
-                            label: o.label,
-                          })),
-                        ]}
+                        items={durationUnitOpts.map((o) => ({
+                          value: o.value,
+                          label: o.label,
+                        }))}
                         onValueChange={field.onChange}
                         value={field.value}
                       >
@@ -627,7 +669,9 @@ export function SubscriptionsMutateDrawer({
                             type='number'
                             min={1}
                             onChange={(e) =>
-                              field.onChange(parseInt(e.target.value, 10) || 0)
+                              field.onChange(
+                                Number.parseInt(e.target.value, 10) || 0
+                              )
                             }
                           />
                         </FormControl>
@@ -648,7 +692,9 @@ export function SubscriptionsMutateDrawer({
                             type='number'
                             min={1}
                             onChange={(e) =>
-                              field.onChange(parseInt(e.target.value, 10) || 0)
+                              field.onChange(
+                                Number.parseInt(e.target.value, 10) || 0
+                              )
                             }
                           />
                         </FormControl>
@@ -675,12 +721,10 @@ export function SubscriptionsMutateDrawer({
                     <FormItem>
                       <FormLabel>{t('Reset Cycle')}</FormLabel>
                       <Select
-                        items={[
-                          ...resetPeriodOpts.map((o) => ({
-                            value: o.value,
-                            label: o.label,
-                          })),
-                        ]}
+                        items={resetPeriodOpts.map((o) => ({
+                          value: o.value,
+                          label: o.label,
+                        }))}
                         onValueChange={field.onChange}
                         value={field.value}
                       >
@@ -717,7 +761,9 @@ export function SubscriptionsMutateDrawer({
                           min={0}
                           disabled={resetPeriod !== 'custom'}
                           onChange={(e) =>
-                            field.onChange(parseInt(e.target.value, 10) || 0)
+                            field.onChange(
+                              Number.parseInt(e.target.value, 10) || 0
+                            )
                           }
                         />
                       </FormControl>

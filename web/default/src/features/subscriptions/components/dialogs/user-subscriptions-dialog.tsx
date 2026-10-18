@@ -22,7 +22,10 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
-import { DataTableRowActionMenu, StaticDataTable } from '@/components/data-table'
+import {
+  DataTableRowActionMenu,
+  StaticDataTable,
+} from '@/components/data-table'
 import {
   sideDrawerContentClassName,
   sideDrawerFormClassName,
@@ -345,6 +348,21 @@ export function UserSubscriptionsDialog(props: Props) {
                     return total > 0
                       ? `${formatQuota(used)}/${formatQuota(total)}`
                       : t('Unlimited')
+                  },
+                },
+                {
+                  id: 'groups',
+                  header: t('Subscription Token Groups'),
+                  cell: (record) => {
+                    const groups = (
+                      record.subscription.allowed_token_groups || ''
+                    )
+                      .split(',')
+                      .map((group) => group.trim())
+                      .filter(Boolean)
+                    return groups.length > 0
+                      ? groups.join(', ')
+                      : t('All groups')
                   },
                 },
                 {

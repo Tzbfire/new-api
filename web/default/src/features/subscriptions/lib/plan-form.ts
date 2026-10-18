@@ -43,6 +43,7 @@ export function getPlanFormSchema(t: TFunction) {
     sort_order: z.coerce.number(),
     allow_balance_pay: z.boolean(),
     allow_wallet_overflow: z.boolean(),
+    allowed_token_groups: z.array(z.string()),
     max_purchase_per_user: z.coerce.number().min(0),
     total_amount: z.coerce.number().min(0),
     upgrade_group: z.string().optional(),
@@ -68,6 +69,7 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   sort_order: 0,
   allow_balance_pay: true,
   allow_wallet_overflow: true,
+  allowed_token_groups: [],
   max_purchase_per_user: 0,
   total_amount: 0,
   upgrade_group: '',
@@ -91,6 +93,10 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
     sort_order: Number(plan.sort_order || 0),
     allow_balance_pay: plan.allow_balance_pay !== false,
     allow_wallet_overflow: plan.allow_wallet_overflow !== false,
+    allowed_token_groups: (plan.allowed_token_groups || '')
+      .split(',')
+      .map((group) => group.trim())
+      .filter(Boolean),
     max_purchase_per_user: Number(plan.max_purchase_per_user || 0),
     total_amount: quotaUnitsToDollars(Number(plan.total_amount || 0)),
     upgrade_group: plan.upgrade_group || '',
@@ -102,6 +108,7 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
 }
 
 export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
+  const allowWalletOverflow = Boolean(values.allow_wallet_overflow)
   return {
     plan: {
       ...values,
@@ -119,6 +126,9 @@ export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
       total_amount: parseQuotaFromDollars(Number(values.total_amount || 0)),
       upgrade_group: values.upgrade_group || '',
       downgrade_group: values.downgrade_group || '',
+      allowed_token_groups: values.allowed_token_groups.join(','),
+      allow_wallet_overflow: allowWalletOverflow,
+      disable_wallet_fallback: !allowWalletOverflow,
     },
   }
 }

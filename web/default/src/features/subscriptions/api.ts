@@ -165,7 +165,6 @@ export async function paySubscriptionBalance(
 // Mints a Pancake OnetimeProduct (see controller for the OnetimeProduct vs
 // SubscriptionProduct rationale) using persisted creds + StoreID.
 export async function createWaffoPancakeSubscriptionProduct(data: {
-  name: string
   amount: string
 }): Promise<
   ApiResponse<{ product_id: string; product_name: string; store_id: string }>
