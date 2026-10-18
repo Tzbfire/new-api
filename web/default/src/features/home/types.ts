@@ -37,3 +37,26 @@ export interface HomePageContentResult {
   isLoaded: boolean
   isUrl: boolean
 }
+
+export interface PublicSubscriptionPlan {
+  id: number
+  title: string
+  subtitle?: string
+  price_amount: number
+  currency: string
+  duration_unit: 'year' | 'month' | 'day' | 'hour' | 'custom'
+  duration_value: number
+  custom_seconds?: number
+  total_amount: number
+  quota_reset_period: 'never' | 'daily' | 'weekly' | 'monthly' | 'custom'
+  quota_reset_custom_seconds?: number
+  upgrade_group?: string
+  allowed_token_groups?: string
+  allow_wallet_overflow?: boolean
+}
+
+export interface PublicSubscriptionPlansResponse {
+  success: boolean
+  message?: string
+  data?: PublicSubscriptionPlan[]
+}
