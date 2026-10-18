@@ -189,9 +189,12 @@ const RegisterForm = () => {
     }
     setWechatCodeSubmitLoading(true);
     try {
-      const res = await API.get(
-        `/api/oauth/wechat?code=${inputs.wechat_verification_code}`,
-      );
+      const res = await API.get('/api/oauth/wechat', {
+        params: {
+          code: inputs.wechat_verification_code,
+          aff: localStorage.getItem('aff') || '',
+        },
+      });
       const { success, message, data } = res.data;
       if (success) {
         userDispatch({ type: 'login', payload: data });

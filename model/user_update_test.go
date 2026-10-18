@@ -62,6 +62,25 @@ func TestUserUpdateDoesNotOverwriteAccountingFields(t *testing.T) {
 	assert.Equal(t, 4, got.RequestCount)
 }
 
+func TestDecreaseUserQuotaIfEnoughNeverMakesQuotaNegative(t *testing.T) {
+	setupUserUpdateTestState(t)
+	user := User{
+		Id:       9,
+		Username: "atomic-quota-user",
+		Password: "password",
+		Status:   common.UserStatusEnabled,
+		Quota:    100,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+
+	require.NoError(t, DecreaseUserQuotaIfEnough(user.Id, 70))
+	require.ErrorIs(t, DecreaseUserQuotaIfEnough(user.Id, 40), ErrInsufficientUserQuota)
+
+	var quota int
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Select("quota").Scan(&quota).Error)
+	assert.Equal(t, 30, quota)
+}
+
 func TestUpdateUserSettingOnlyUpdatesSetting(t *testing.T) {
 	setupUserUpdateTestState(t)
 
