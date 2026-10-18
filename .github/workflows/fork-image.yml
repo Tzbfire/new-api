@@ -37,11 +37,14 @@ jobs:
 
       - name: Prepare embedded frontend assets
         run: |
-          mkdir -p web/default/dist web/classic/dist
-          touch web/default/dist/index.html web/classic/dist/index.html
+          mkdir -p web/dist
+          touch web/dist/index.html
 
       - name: Test
-        run: go test ./...
+        run: |
+          go test ./...
+          (cd relaykit && GOWORK=off go build ./...)
+          (cd tokenkit && GOWORK=off go build ./...)
 
   publish:
     needs: verify

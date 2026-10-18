@@ -79,7 +79,7 @@ func ListImageStudioBatchTasks(c *gin.Context) {
 		}
 	}
 	common.ApiSuccess(c, gin.H{
-		"items": tasksToDto(tasks, false), "total": total, "page": page, "page_size": pageSize,
+		"items": tasksToDto(tasks, false, common.RoleCommonUser), "total": total, "page": page, "page_size": pageSize,
 	})
 }
 

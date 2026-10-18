@@ -13,7 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -21,8 +21,9 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -32,9 +33,10 @@ const (
 )
 
 type imageStudioTaskPayload struct {
-	Request  imageStudioRequestMeta `json:"request,omitempty"`
-	Response any                    `json:"response,omitempty"`
-	Usage    *dto.Usage             `json:"usage,omitempty"`
+	Request  imageStudioRequestMeta     `json:"request,omitempty"`
+	Response any                        `json:"response,omitempty"`
+	Usage    *dto.Usage                 `json:"usage,omitempty"`
+	Plugin   *imageStudioPluginSnapshot `json:"plugin,omitempty"`
 }
 
 type imageStudioRequestMeta struct {
@@ -67,6 +69,9 @@ func estimateImageStudioBatchQuota(perImageQuota int, count uint) int {
 func estimateImageStudioPerImageQuota(c *gin.Context, imageRequest *dto.ImageRequest) (quota int, usingGroup string, err error) {
 	if imageRequest == nil {
 		return 0, "", fmt.Errorf("invalid image request")
+	}
+	if quota, group, claimed, pluginErr := estimateImageStudioPluginQuota(c, imageRequest); claimed || pluginErr != nil {
+		return quota, group, pluginErr
 	}
 	one := uint(1)
 	imageRequest.N = &one
@@ -287,7 +292,7 @@ func CreateImageStudioTask(c *gin.Context) {
 		return
 	}
 
-	taskDTOs := make([]*dto.TaskDto, 0, len(taskBodies))
+	taskDTOs := make([]*taskdto.TaskDto, 0, len(taskBodies))
 	inserted := make([]*model.Task, 0, len(taskBodies))
 	committed := false
 	defer func() {
@@ -478,7 +483,7 @@ func runImageStudioClaimedTask(task *model.Task) {
 	task.FailReason = ""
 	var previous imageStudioTaskPayload
 	_ = common.Unmarshal(task.Data, &previous)
-	task.SetData(imageStudioTaskPayload{Request: previous.Request, Response: payload, Usage: usage})
+	task.SetData(imageStudioTaskPayload{Request: previous.Request, Response: payload, Usage: usage, Plugin: previous.Plugin})
 	if won, err := model.FinalizeImageStudioTask(task); err != nil {
 		cleanupImageStudioPayloadAssets(context.Background(), task, payload)
 		logger.LogError(context.Background(), fmt.Sprintf("image studio finish task %s failed: %s", task.TaskID, err.Error()))
@@ -535,16 +540,26 @@ func buildImageStudioExecutionContext(ctx context.Context, task *model.Task, rel
 	// Fresh channel selection at execution time keeps unhealthy channels out of
 	// durable jobs that may have waited in QUEUED after a restart.
 	retry := 0
-	channel, _, channelErr := service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-		Ctx:         c,
-		TokenGroup:  groupName,
-		ModelName:   modelName,
-		RequestPath: relayPath,
-		Retry:       &retry,
-	})
-	if channelErr != nil {
+	var checkpoint imageStudioTaskPayload
+	_ = common.Unmarshal(task.Data, &checkpoint)
+	var channel *model.Channel
+	if checkpoint.Plugin != nil {
+		channel, err = model.GetChannelById(task.ChannelId, true)
+		if err == nil && channel.Status != common.ChannelStatusEnabled {
+			err = errors.New("the image task channel is disabled")
+		}
+	} else {
+		var channelErr error
+		channel, _, channelErr = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
+			Ctx: c, TokenGroup: groupName, ModelName: modelName, RequestPath: relayPath, Retry: &retry,
+		})
+		if channelErr != nil {
+			err = channelErr
+		}
+	}
+	if err != nil {
 		responseWriter.Close()
-		return nil, nil, channelErr
+		return nil, nil, err
 	}
 	if setupErr := middleware.SetupContextForSelectedChannel(c, channel, modelName); setupErr != nil {
 		responseWriter.Close()
@@ -561,6 +576,13 @@ func buildImageStudioExecutionContext(ctx context.Context, task *model.Task, rel
 }
 
 func executeImageStudioRelay(c *gin.Context, responseWriter *imageStudioResponseWriter, task *model.Task) (any, *dto.Usage, int, error) {
+	if handled, err := executeImageStudioPlugin(c, responseWriter, task); handled || err != nil {
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		payload, usage, parseErr := responseWriter.Process()
+		return payload, usage, task.Quota, parseErr
+	}
 	Relay(c, types.RelayFormatOpenAIImage)
 	if responseWriter.exceeded {
 		return nil, nil, 0, errors.New("上游图片响应超过 AI 画室大小限制")
@@ -625,6 +647,7 @@ func persistImageStudioBillingSnapshot(task *model.Task, info *relaycommon.Relay
 		OtherRatios:     info.PriceData.OtherRatios(),
 		OriginModelName: info.OriginModelName,
 		PerCallBilling:  common.StringsContains(constant.TaskPricePatches, info.OriginModelName) || info.PriceData.UsePrice,
+		TieredSnapshot:  info.TieredBillingSnapshot,
 	}
 	task.UpdatedAt = time.Now().Unix()
 	won, err := task.UpdateBillingSnapshot(model.TaskStatusInProgress)

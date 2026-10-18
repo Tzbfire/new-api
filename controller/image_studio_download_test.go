@@ -3,6 +3,8 @@ package controller
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
@@ -12,9 +14,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -207,4 +212,148 @@ func TestDownloadImageStudioTaskImagesRejectsMoreThanOnePage(t *testing.T) {
 	DownloadImageStudioTaskImages(context)
 
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+}
+
+func TestImageStudioDownloadTicketPreservesStreamAndRejectsScopeChanges(t *testing.T) {
+	setupImageStudioAssetDB(t)
+	t.Setenv("IMAGE_STUDIO_STORAGE_PATH", t.TempDir())
+	previousSecret := common.CryptoSecret
+	common.CryptoSecret = "studio-download-ticket-test-secret"
+	t.Cleanup(func() { common.CryptoSecret = previousSecret })
+	require.NoError(t, model.DB.AutoMigrate(&model.User{}))
+	users := []model.User{{Id: 61, Username: "ticket-owner", AffCode: "ticket-owner", Status: common.UserStatusEnabled}, {Id: 62, Username: "ticket-other", AffCode: "ticket-other", Status: common.UserStatusEnabled}}
+	require.NoError(t, model.DB.Create(&users).Error)
+	expected := createDownloadableImageStudioTask(t, 61, "ticket-task", color.RGBA{R: 255, A: 255})
+
+	issue := func(userID int, body string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/api/image-studio/download-ticket", strings.NewReader(body))
+		c.Set("id", userID)
+		CreateImageStudioDownloadTicket(c)
+		return recorder
+	}
+	issued := issue(61, `{"scope":"tasks","task_ids":["ticket-task"],"user_id":62}`)
+	require.Equal(t, http.StatusOK, issued.Code, issued.Body.String())
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			URL       string `json:"url"`
+			ExpiresAt int64  `json:"expires_at"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(issued.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	assert.InDelta(t, time.Now().Add(imageStudioDownloadTicketTTL).Unix(), response.Data.ExpiresAt, 2)
+	download := func(target string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, target, nil)
+		DownloadImageStudioWithTicket(c)
+		return recorder
+	}
+	archiveResponse := download(response.Data.URL)
+	require.Equal(t, http.StatusOK, archiveResponse.Code, archiveResponse.Body.String())
+	assert.Equal(t, "no", archiveResponse.Header().Get("X-Accel-Buffering"))
+	archive, err := zip.NewReader(bytes.NewReader(archiveResponse.Body.Bytes()), int64(archiveResponse.Body.Len()))
+	require.NoError(t, err)
+	require.Len(t, archive.File, 1)
+	file, err := archive.File[0].Open()
+	require.NoError(t, err)
+	actual, err := io.ReadAll(file)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	assert.Equal(t, expected, actual)
+
+	assert.Equal(t, http.StatusNotFound, issue(62, `{"scope":"tasks","task_ids":["ticket-task"]}`).Code)
+	assert.Equal(t, http.StatusBadRequest, issue(61, `{"scope":"tasks","task_ids":["ticket-task","ticket-task"]}`).Code)
+	assert.Equal(t, http.StatusUnauthorized, issue(0, `{"scope":"tasks","task_ids":["ticket-task"]}`).Code)
+	taskIDs := make([]string, maxImageStudioPageDownloadTasks+1)
+	for index := range taskIDs {
+		taskIDs[index] = fmt.Sprintf("ticket-task-%d", index)
+	}
+	oversized, err := common.Marshal(imageStudioDownloadTicket{Scope: "tasks", TaskIDs: taskIDs})
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, issue(61, string(oversized)).Code)
+
+	setImageStudioDownloadAllForTest(t, false)
+	assert.Equal(t, http.StatusForbidden, issue(61, `{"scope":"library"}`).Code)
+
+	for _, target := range []string{response.Data.URL + "&user_id=62", response.Data.URL + "&task_ids=other", response.Data.URL + "tamper"} {
+		assert.Equal(t, http.StatusForbidden, download(target).Code)
+	}
+	for _, ticket := range []imageStudioDownloadTicket{
+		{UserID: 61, Scope: "tasks", TaskIDs: []string{"ticket-task"}, ExpiresAt: time.Now().Add(-time.Second).Unix()},
+		{UserID: 62, Scope: "tasks", TaskIDs: []string{"ticket-task"}, ExpiresAt: time.Now().Add(time.Minute).Unix()},
+		{UserID: 61, Scope: "library", ExpiresAt: time.Now().Add(time.Minute).Unix()},
+	} {
+		target, err := imageStudioDownloadTicketURL(ticket)
+		require.NoError(t, err)
+		assert.NotEqual(t, http.StatusOK, download(target).Code)
+	}
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", 61).Update("status", common.UserStatusDisabled).Error)
+	assert.Equal(t, http.StatusForbidden, download(response.Data.URL).Code)
+}
+
+func TestLegacyImageStudioPreviewUsesScopedDownloadTicket(t *testing.T) {
+	setupImageStudioAssetDB(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.User{}))
+	require.NoError(t, model.DB.Create(&model.User{Id: 71, Username: "legacy-ticket-user", Status: common.UserStatusEnabled}).Error)
+	var data bytes.Buffer
+	require.NoError(t, png.Encode(&data, image.NewRGBA(image.Rect(0, 0, 2, 2))))
+	task := &model.Task{TaskID: "legacy-ticket-image", UserId: 71, Platform: constant.TaskPlatformImageStudio, Status: model.TaskStatusSuccess}
+	task.Data = json.RawMessage(`{"data":[{"b64_json":"` + base64.StdEncoding.EncodeToString(data.Bytes()) + `"}]}`)
+	require.NoError(t, model.DB.Create(task).Error)
+	taskDTO := &dto.TaskDto{Data: task.Data}
+	sanitizeImageStudioTaskDtoWithAssets(task, taskDTO, nil)
+	var payload struct {
+		Data []struct {
+			URL         string `json:"url"`
+			DownloadURL string `json:"download_url"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(taskDTO.Data, &payload))
+	require.Len(t, payload.Data, 1)
+	for _, target := range []string{payload.Data[0].URL, payload.Data[0].DownloadURL} {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, target, nil)
+		DownloadImageStudioWithTicket(c)
+		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		assert.Equal(t, data.Bytes(), recorder.Body.Bytes())
+		assert.Equal(t, "private, no-store", recorder.Header().Get("Cache-Control"))
+		if target == payload.Data[0].DownloadURL {
+			assert.Contains(t, recorder.Header().Get("Content-Disposition"), "attachment;")
+		} else {
+			assert.Empty(t, recorder.Header().Get("Content-Disposition"))
+		}
+	}
+}
+
+func TestImageStudioDownloadTicketDoesNotEnterAccessLogs(t *testing.T) {
+	previousWriter := gin.DefaultWriter
+	var log bytes.Buffer
+	gin.DefaultWriter = &log
+	t.Cleanup(func() { gin.DefaultWriter = previousWriter })
+	router := gin.New()
+	middleware.SetUpLogger(router)
+	router.GET("/api/image-studio/download", func(c *gin.Context) { c.Status(http.StatusForbidden) })
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/image-studio/download?ticket=sensitive-download-capability", nil))
+	assert.Contains(t, log.String(), "/api/image-studio/download")
+	assert.NotContains(t, log.String(), "sensitive-download-capability")
+	assert.NotContains(t, log.String(), "ticket=")
+}
+
+func TestPendingImageStudioDTOHidesPrivatePluginCheckpoint(t *testing.T) {
+	setupImageStudioAssetDB(t)
+	task := &model.Task{TaskID: "pending-private-plugin", UserId: 81, Platform: constant.TaskPlatformImageStudio, Status: model.TaskStatusInProgress}
+	task.Data = json.RawMessage(`{"request":{"model":"test-image"},"plugin":{"key":"vendor","upstream_task_id":"private-provider-id","data":{"secret":"private-provider-response"}}}`)
+	require.NoError(t, model.DB.Create(task).Error)
+	taskDTO := &dto.TaskDto{Data: task.Data}
+	sanitizeImageStudioTaskDtoWithAssets(task, taskDTO, nil)
+	assert.JSONEq(t, `{"request":{"model":"test-image"}}`, string(taskDTO.Data))
+	assert.Contains(t, string(task.Data), "private-provider-id")
+	var stored model.Task
+	require.NoError(t, model.DB.First(&stored, task.ID).Error)
+	assert.JSONEq(t, string(task.Data), string(stored.Data))
 }

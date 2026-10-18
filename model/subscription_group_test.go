@@ -69,6 +69,12 @@ func TestPreConsumeUserSubscriptionUsesPurchaseScopeAndRequestGroup(t *testing.T
 
 	_, err = PreConsumeUserSubscription("scope-vip", 9703, "gpt-image-1", 0, "default", 10)
 	require.ErrorContains(t, err, "request group mismatch")
+
+	require.NoError(t, RefundSubscriptionPreConsume("scope-vip"))
+	require.NoError(t, RefundSubscriptionPreConsume("scope-vip"))
+	var refunded UserSubscription
+	require.NoError(t, DB.First(&refunded, 9702).Error)
+	assert.Zero(t, refunded.AmountUsed, "replaying the refund must not apply it twice")
 }
 
 func TestWalletOverflowOnlyConsidersMatchingSubscriptions(t *testing.T) {

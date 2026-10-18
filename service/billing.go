@@ -2,11 +2,13 @@ package service
 
 import (
 	"fmt"
+	"net/http"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -119,7 +121,13 @@ func PreHoldImageStudioBilling(c *gin.Context, relayInfo *relaycommon.RelayInfo,
 	if relayInfo == nil {
 		return ImageStudioPrehold{}, types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
-	if quota <= 0 {
+	if relayInfo.QuotaClamp != nil {
+		return ImageStudioPrehold{}, types.NewErrorWithStatusCode(relayInfo.QuotaClamp, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	if quota < 0 {
+		return ImageStudioPrehold{}, types.NewErrorWithStatusCode(fmt.Errorf("pre-consume quota cannot be negative: %d", quota), types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	if quota == 0 {
 		return ImageStudioPrehold{}, nil
 	}
 
@@ -154,6 +162,22 @@ func PreHoldImageStudioBilling(c *gin.Context, relayInfo *relaycommon.RelayInfo,
 }
 
 func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	if relayInfo != nil && relayInfo.QuotaClamp != nil {
+		return types.NewErrorWithStatusCode(
+			relayInfo.QuotaClamp,
+			types.ErrorCodeModelPriceError,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	if preConsumedQuota < 0 {
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("pre-consume quota cannot be negative: %d", preConsumedQuota),
+			types.ErrorCodeModelPriceError,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
 	if held, ok := imageStudioPreheld(c); ok {
 		return adoptImageStudioPreheldBilling(c, relayInfo, held)
 	}
@@ -173,6 +197,10 @@ func adoptImageStudioPreheldBilling(c *gin.Context, relayInfo *relaycommon.Relay
 		return types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 	held := hold.Quota
+	// 浏览器画室不绑定 API 令牌，接管预留时恢复这一计费身份。
+	if UsesDurableAsyncBilling(c) {
+		relayInfo.IsPlayground = true
+	}
 	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
@@ -192,7 +220,7 @@ func adoptImageStudioPreheldBilling(c *gin.Context, relayInfo *relaycommon.Relay
 		subFunding := &SubscriptionFunding{
 			requestId:      requestId,
 			userId:         relayInfo.UserId,
-			modelName:      relayInfo.OriginModelName,
+			modelName:      relayInfo.GetBillingModelName(),
 			usingGroup:     relayInfo.UsingGroup,
 			amount:         int64(held),
 			subscriptionId: hold.SubscriptionId,
@@ -233,19 +261,19 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 		delta := actualQuota - preConsumed
 
 		if delta > 0 {
-			logger.LogInfo(ctx, fmt.Sprintf("预扣费后补扣费：%s（实际消耗：%s，预扣费：%s）",
+			logger.LogInfo(ctx, common.LogText("charging the difference after pre-consume: %s (actual %s, pre-consumed %s)",
 				logger.FormatQuota(delta),
 				logger.FormatQuota(actualQuota),
 				logger.FormatQuota(preConsumed),
 			))
 		} else if delta < 0 {
-			logger.LogInfo(ctx, fmt.Sprintf("预扣费后返还扣费：%s（实际消耗：%s，预扣费：%s）",
+			logger.LogInfo(ctx, common.LogText("refunding the difference after pre-consume: %s (actual %s, pre-consumed %s)",
 				logger.FormatQuota(-delta),
 				logger.FormatQuota(actualQuota),
 				logger.FormatQuota(preConsumed),
 			))
 		} else {
-			logger.LogInfo(ctx, fmt.Sprintf("预扣费与实际消耗一致，无需调整：%s（按次计费）",
+			logger.LogInfo(ctx, common.LogText("pre-consumed quota matches the actual quota, no adjustment: %s (per-request billing)",
 				logger.FormatQuota(actualQuota),
 			))
 		}
@@ -275,4 +303,20 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 	}
 	notifyBillingSettlementObserver(ctx, relayInfo, actualQuota)
 	return nil
+}
+
+// SettleImageStudioPluginTask 原子保存画室插件的资金差额与恢复检查点，不影响普通 relay 结算。
+func SettleImageStudioPluginTask(c *gin.Context, task *model.Task, actualQuota int, checkpointData []byte) error {
+	var checkpoint struct {
+		Plugin *struct {
+			Settled bool `json:"settled"`
+		} `json:"plugin"`
+	}
+	if err := common.Unmarshal(checkpointData, &checkpoint); err != nil {
+		return err
+	}
+	if checkpoint.Plugin == nil {
+		return fmt.Errorf("image studio plugin checkpoint is missing")
+	}
+	return model.SettleImageStudioPluginTask(task, actualQuota, checkpointData, checkpoint.Plugin.Settled)
 }

@@ -1,9 +1,9 @@
 package controller
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"path/filepath"
 	"testing"
 
@@ -11,8 +11,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -54,7 +52,7 @@ func setupOAuthInviterTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
 	model.DB = db
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserOAuthBinding{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserOAuthBinding{}, &model.AuthFlow{}))
 	return db
 }
 
@@ -107,26 +105,29 @@ func TestOAuthRegistrationInvitationAttribution(t *testing.T) {
 					}
 				}
 
-				router := gin.New()
-				router.Use(sessions.Sessions("session", cookie.NewStore([]byte("oauth-inviter-test-secret"))))
-				router.GET("/api/oauth/state", GenerateOAuthCode)
-				var user *model.User
-				var registrationErr error
-				router.GET("/callback", func(c *gin.Context) {
-					user, registrationErr = findOrCreateOAuthUser(c, provider, oauthUser, sessions.Default(c))
-				})
-
+				providerName := "inviter-" + providerCase.name
+				oauth.Register(providerName, provider)
+				t.Cleanup(func() { oauth.Unregister(providerName) })
+				body, err := common.Marshal(oauthStateRequest{Provider: providerName, Intent: model.AuthFlowIntentLogin, Aff: testCase.affCode})
+				require.NoError(t, err)
 				stateRecorder := httptest.NewRecorder()
-				statePath := "/api/oauth/state?" + url.Values{"aff": {testCase.affCode}}.Encode()
-				router.ServeHTTP(stateRecorder, httptest.NewRequest(http.MethodGet, statePath, nil))
+				stateContext, _ := gin.CreateTestContext(stateRecorder)
+				stateContext.Request = httptest.NewRequest(http.MethodPost, "/api/oauth/state", bytes.NewReader(body))
+				GenerateOAuthCode(stateContext)
 				require.Equal(t, http.StatusOK, stateRecorder.Code)
-				cookies := stateRecorder.Result().Cookies()
-				require.NotEmpty(t, cookies)
-				callbackRequest := httptest.NewRequest(http.MethodGet, "/callback", nil)
-				for _, sessionCookie := range cookies {
-					callbackRequest.AddCookie(sessionCookie)
+				var stateResponse struct {
+					Success bool `json:"success"`
+					Data    struct {
+						FlowToken string `json:"flow_token"`
+					} `json:"data"`
 				}
-				router.ServeHTTP(httptest.NewRecorder(), callbackRequest)
+				require.NoError(t, common.Unmarshal(stateRecorder.Body.Bytes(), &stateResponse))
+				require.True(t, stateResponse.Success, stateRecorder.Body.String())
+				flow, err := model.GetAuthFlow(stateResponse.Data.FlowToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth, Provider: providerName, Intent: model.AuthFlowIntentLogin})
+				require.NoError(t, err)
+				var flowPayload oauthFlowPayload
+				require.NoError(t, common.UnmarshalJsonStr(flow.Payload, &flowPayload))
+				user, _, registrationErr := findOrCreateOAuthUser(stateContext, provider, oauthUser, nil, flowPayload.AffiliateCode)
 				require.NoError(t, registrationErr)
 				require.NotNil(t, user)
 				if testCase.existingUser {

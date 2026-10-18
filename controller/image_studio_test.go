@@ -686,7 +686,7 @@ func TestLegacyImageStudioBase64RemainsAccessibleAfterSanitizing(t *testing.T) {
 	require.NoError(t, common.Unmarshal(taskDTO.Data, &sanitized))
 	response := sanitized["response"].(map[string]any)
 	imageData := response["data"].([]any)[0].(map[string]any)
-	assert.Equal(t, "/api/task/image-studio/task_legacy_image/images/1/content", imageData["url"])
+	assert.Contains(t, imageData["url"], "/api/image-studio/download?ticket=")
 	assert.NotContains(t, imageData, "b64_json")
 
 	legacyImage, found := findImageStudioImage(task.Data, 1)

@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -99,7 +100,7 @@ func TestCreateWaffoPancakeSubscriptionProductUsesPriceName(t *testing.T) {
 
 			assert.Equal(t, http.StatusOK, recorder.Code)
 			if tc.expectedAmount == "" {
-				assert.JSONEq(t, `{"message":"error","data":"创建套餐产品失败"}`, recorder.Body.String())
+				assert.JSONEq(t, `{"message":"error","data":"Failed to create the plan product","message_key":"Failed to create the plan product"}`, recorder.Body.String())
 				assert.Empty(t, paths)
 				return
 			}
@@ -134,9 +135,7 @@ func TestGetWaffoPancakePayMoney(t *testing.T) {
 	originalUnitPrice := setting.WaffoPancakeUnitPrice
 	originalQuotaDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
 	originalDiscounts := make(map[int]float64, len(operation_setting.GetPaymentSetting().AmountDiscount))
-	for k, v := range operation_setting.GetPaymentSetting().AmountDiscount {
-		originalDiscounts[k] = v
-	}
+	maps.Copy(originalDiscounts, operation_setting.GetPaymentSetting().AmountDiscount)
 	originalTopupGroupRatio := common.TopupGroupRatio2JSONString()
 
 	t.Cleanup(func() {

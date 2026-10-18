@@ -4,13 +4,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,7 +18,7 @@ import (
 func setupWeChatInviterTest(t *testing.T) (*gin.Engine, *gorm.DB) {
 	t.Helper()
 	db := openPublicSubscriptionPlanTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Log{}, &model.AuditLog{}, &model.UserSession{}, &model.TwoFA{}, &model.PasskeyCredential{}, &model.AuthFlow{}, &model.UserOAuthBinding{}))
 	setPublicPlanCompliance(t, false)
 
 	previousEnabled := common.WeChatAuthEnabled
@@ -57,7 +55,6 @@ func setupWeChatInviterTest(t *testing.T) (*gin.Engine, *gorm.DB) {
 	common.WeChatServerAddress = provider.URL
 
 	router := gin.New()
-	router.Use(sessions.Sessions("wechat_test_session", cookie.NewStore([]byte("wechat-test-session-secret"))))
 	router.GET("/api/oauth/wechat", WeChatAuth)
 	return router, db
 }
@@ -97,7 +94,9 @@ func TestWeChatAuthInviterOnlyAppliesOnRegistration(t *testing.T) {
 				Success bool   `json:"success"`
 				Message string `json:"message"`
 				Data    struct {
-					ID int `json:"id"`
+					User struct {
+						ID int `json:"id"`
+					} `json:"user"`
 				} `json:"data"`
 			}
 			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
@@ -105,7 +104,7 @@ func TestWeChatAuthInviterOnlyAppliesOnRegistration(t *testing.T) {
 			assert.NotEmpty(t, recorder.Result().Cookies())
 			var user model.User
 			require.NoError(t, db.Where("wechat_id = ?", "wechat_test_identity").First(&user).Error)
-			assert.Equal(t, response.Data.ID, user.Id)
+			assert.Equal(t, response.Data.User.ID, user.Id)
 			assert.Equal(t, tc.wantInviterID, user.InviterId)
 			var userCount int64
 			require.NoError(t, db.Model(&model.User{}).Count(&userCount).Error)
@@ -115,21 +114,26 @@ func TestWeChatAuthInviterOnlyAppliesOnRegistration(t *testing.T) {
 }
 
 func TestWeChatBindKeepsExistingInviter(t *testing.T) {
-	router, db := setupWeChatInviterTest(t)
+	_, db := setupWeChatInviterTest(t)
 	users := []model.User{
 		{Id: 1, Username: "original-inviter", AffCode: "original", Status: common.UserStatusEnabled},
 		{Id: 2, Username: "other-inviter", AffCode: "other", Status: common.UserStatusEnabled},
 		{Id: 3, Username: "existing-user", AffCode: "existing", InviterId: 1, Status: common.UserStatusEnabled},
 	}
 	require.NoError(t, db.Create(&users).Error)
-	router.POST("/api/oauth/wechat/bind", func(c *gin.Context) {
-		sessions.Default(c).Set("id", 3)
-		WeChatBind(c)
-	})
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/oauth/wechat/bind?aff=other", strings.NewReader(`{"code":"code+test&1"}`))
-	request.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(recorder, request)
+	password, err := common.Password2Hash("inviter-bind-password")
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", 3).Update("password", password).Error)
+	bundle, err := service.CreateLoginSession(3, "password", "127.0.0.1", "wechat-bind")
+	require.NoError(t, err)
+	identity, err := service.ParseAccessToken(bundle.AccessToken)
+	require.NoError(t, err)
+	context, err := common.Marshal(service.AccountBindingContext{Provider: "wechat", Code: "code+test&1"})
+	require.NoError(t, err)
+	proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopeAccountBind, Context: context}, service.VerificationMethodPassword)
+	missing := securityEnrollmentRequest(http.MethodPost, "/api/oauth/wechat/bind?aff=other", `{"code":"code+test&1"}`, "", identity, WeChatBind)
+	assert.Equal(t, http.StatusForbidden, missing.Code)
+	recorder := securityEnrollmentRequest(http.MethodPost, "/api/oauth/wechat/bind?aff=other", `{"code":"code+test&1"}`, proof, identity, WeChatBind)
 	require.Equal(t, http.StatusOK, recorder.Code)
 	var response struct {
 		Success bool   `json:"success"`
@@ -141,4 +145,6 @@ func TestWeChatBindKeepsExistingInviter(t *testing.T) {
 	require.NoError(t, db.First(&user, 3).Error)
 	assert.Equal(t, "wechat_test_identity", user.WeChatId)
 	assert.Equal(t, 1, user.InviterId)
+	replayed := securityEnrollmentRequest(http.MethodPost, "/api/oauth/wechat/bind?aff=other", `{"code":"code+test&1"}`, proof, identity, WeChatBind)
+	assert.Equal(t, http.StatusForbidden, replayed.Code)
 }

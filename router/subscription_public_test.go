@@ -7,8 +7,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,7 +14,6 @@ import (
 
 func newPublicPlansTestEngine() *gin.Engine {
 	engine := gin.New()
-	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("public-plans-test"))))
 	SetApiRouter(engine)
 	return engine
 }

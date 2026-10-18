@@ -51,7 +51,7 @@ type ImageStudioBatch struct {
 type ImageStudioBatchItem struct {
 	ID         int64 `json:"-" gorm:"primaryKey"`
 	BatchDBID  int64 `json:"-" gorm:"uniqueIndex:idx_image_studio_batch_index,priority:1;index;not null"`
-	TaskDBID   int64 `json:"-" gorm:"uniqueIndex;index;not null"`
+	TaskDBID   int64 `json:"-" gorm:"uniqueIndex;not null"`
 	BatchIndex int   `json:"batch_index" gorm:"uniqueIndex:idx_image_studio_batch_index,priority:2;not null"`
 }
 

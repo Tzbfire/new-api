@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
@@ -39,8 +40,16 @@ func sanitizeImageStudioTaskDtoWithAssets(task *model.Task, taskDto *dto.TaskDto
 	if err := common.Unmarshal(taskDto.Data, &payload); err != nil {
 		return
 	}
+	// 插件检查点仅供后台恢复，可能包含上游私有任务 ID 和原始回包。
+	changed := false
+	if root, ok := payload.(map[string]any); ok {
+		if _, exists := root["plugin"]; exists {
+			delete(root, "plugin")
+			changed = true
+		}
+	}
 	imageIndex := 1
-	if !sanitizeImageStudioTaskPayload(task, payload, &imageIndex, assetsByIndex) {
+	if !sanitizeImageStudioTaskPayload(task, payload, &imageIndex, assetsByIndex) && !changed {
 		return
 	}
 	data, err := common.Marshal(payload)
@@ -79,9 +88,10 @@ func sanitizeImageStudioTaskPayload(task *model.Task, value any, imageIndex *int
 					image["url"], image["download_url"] = service.ImageStudioAssetURL(asset.ID, now)
 					changed = true
 				} else if asset == nil && hasLegacyContent {
-					contentURL := fmt.Sprintf("/api/task/image-studio/%s/images/%d/content", task.TaskID, *imageIndex)
-					image["url"] = contentURL
-					image["download_url"] = contentURL + "?download=1"
+					ticket := imageStudioDownloadTicket{UserID: task.UserId, Scope: "image", TaskIDs: []string{task.TaskID}, ImageIndex: *imageIndex, ExpiresAt: now.Add(imageStudioDownloadTicketTTL).Unix()}
+					image["url"], _ = imageStudioDownloadTicketURL(ticket)
+					ticket.Download = true
+					image["download_url"], _ = imageStudioDownloadTicketURL(ticket)
 					changed = true
 				} else if asset != nil {
 					delete(image, "url")
@@ -174,7 +184,11 @@ func GetImageStudioTaskImage(c *gin.Context) {
 		defer file.Close()
 		etag := `"` + asset.SHA256 + `"`
 		c.Header("ETag", etag)
-		c.Header("Cache-Control", "private, max-age=31536000, immutable")
+		if c.GetBool("image_studio_download_ticket") {
+			c.Header("Cache-Control", "private, no-store")
+		} else {
+			c.Header("Cache-Control", "private, max-age=31536000, immutable")
+		}
 		c.Header("Content-Security-Policy", "default-src 'none'")
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("Content-Type", asset.MimeType)
@@ -211,9 +225,16 @@ func GetImageStudioTaskImage(c *gin.Context) {
 		imageStudioContentError(c, http.StatusNotFound, "image content not found")
 		return
 	}
-	c.Header("Cache-Control", "private, max-age=3600")
+	if c.GetBool("image_studio_download_ticket") {
+		c.Header("Cache-Control", "private, no-store")
+	} else {
+		c.Header("Cache-Control", "private, max-age=3600")
+	}
 	c.Header("Content-Security-Policy", "default-src 'none'")
 	c.Header("X-Content-Type-Options", "nosniff")
+	if c.Query("download") == "1" {
+		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="image-%s-%d%s"`, task.TaskID, index, imageStudioMimeExtension(mimeType)))
+	}
 	c.Data(http.StatusOK, mimeType, data)
 }
 
@@ -240,11 +261,7 @@ func DownloadImageStudioTaskImages(c *gin.Context) {
 		return
 	}
 
-	queryIDs := make([]any, 0, len(taskIDs))
-	for _, taskID := range taskIDs {
-		queryIDs = append(queryIDs, taskID)
-	}
-	tasks, err := model.GetByTaskIds(c.GetInt("id"), queryIDs)
+	tasks, err := model.GetByTaskIdsForPlatforms(c.GetInt("id"), []constant.TaskPlatform{imageStudioTaskPlatform}, taskIDs)
 	if err != nil {
 		common.ApiError(c, err)
 		return

@@ -7,11 +7,11 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -88,7 +88,7 @@ func zhipu4vImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 			url = data.ImageUrl
 		}
 		if url == "" {
-			logger.LogWarn(c, "zhipu_image_missing_url")
+			logger.LogWarn(c, common.LogText("zhipu_image_missing_url"))
 			continue
 		}
 
@@ -104,14 +104,14 @@ func zhipu4vImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 			}
 			_, downloaded, err := service.GetImageFromUrl(url)
 			if err != nil {
-				logger.LogError(c, "zhipu_image_get_b64_failed: "+err.Error())
+				logger.LogError(c, common.LogText("zhipu_image_get_b64_failed: %s", err.Error()))
 				continue
 			}
 			b64 = downloaded
 		}
 
 		if b64 == "" {
-			logger.LogWarn(c, "zhipu_image_empty_b64")
+			logger.LogWarn(c, common.LogText("zhipu_image_empty_b64"))
 			continue
 		}
 

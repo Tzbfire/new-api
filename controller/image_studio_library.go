@@ -59,7 +59,7 @@ func ListImageStudioLibraryTasks(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, gin.H{
-		"items":     tasksToDto(tasks, false),
+		"items":     tasksToDto(tasks, false, common.RoleCommonUser),
 		"total":     total,
 		"page":      page,
 		"page_size": pageSize,
