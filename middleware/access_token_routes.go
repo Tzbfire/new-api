@@ -143,6 +143,8 @@ var accessTokenRouteRules = map[string]accessTokenRouteRule{
 
 	// router/api-router.go: /api/subscription
 	"GET /api/subscription/plans":                                    accessTokenScopeRule("wallet:read"),
+	"GET /api/subscription/plans/:id/pricing":                        accessTokenScopeRule("wallet:read"),
+	"GET /api/subscription/plans/:id/pricing/quote":                  accessTokenScopeRule("wallet:read"),
 	"GET /api/subscription/self":                                     accessTokenScopeRule("wallet:read"),
 	"PUT /api/subscription/self/preference":                          accessTokenScopeRule("wallet:write"),
 	"POST /api/subscription/balance/pay":                             accessTokenScopeRule("wallet:write"),

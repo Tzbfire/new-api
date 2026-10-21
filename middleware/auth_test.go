@@ -320,8 +320,11 @@ func TestUserAuthAppliesAccessTokenRouteRules(t *testing.T) {
 	require.NoError(t, model.DB.Model(admin).Update("role", common.RoleAdminUser).Error)
 	profile, _ := createMiddlewareScopedToken(t, admin.Id, 0, "profile:read")
 	usage, _ := createMiddlewareScopedToken(t, admin.Id, 0, "usage:read")
+	wallet, _ := createMiddlewareScopedToken(t, admin.Id, 0, "wallet:read")
+	walletWrite, _ := createMiddlewareScopedToken(t, admin.Id, 0, "wallet:write")
 	channel, _ := createMiddlewareScopedToken(t, admin.Id, time.Now().Unix()+3600, "channel:read")
 	expired, _ := createMiddlewareScopedToken(t, admin.Id, time.Now().Unix()-1, "profile:read")
+	expiredWallet, _ := createMiddlewareScopedToken(t, admin.Id, time.Now().Unix()-1, "wallet:read")
 
 	ok := func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"id": c.GetInt("id")}) }
 	router := gin.New()
@@ -331,6 +334,8 @@ func TestUserAuthAppliesAccessTokenRouteRules(t *testing.T) {
 	router.GET("/api/channel/", AdminAuth(), RequirePermission(authz.ChannelRead), ok)
 	router.GET("/api/pricing", TryUserAuth(), ok)
 	router.GET("/api/pricing/quote", TryUserAuth(), ok)
+	router.GET("/api/subscription/plans/:id/pricing", UserAuth(), ok)
+	router.GET("/api/subscription/plans/:id/pricing/quote", UserAuth(), ok)
 	router.GET("/api/image-studio/library/tasks", UserAuth(), ok)
 	router.GET("/pg/image-studio/config", UserAuth(), ok)
 
@@ -341,6 +346,14 @@ func TestUserAuthAppliesAccessTokenRouteRules(t *testing.T) {
 		{name: "granted scope on a never expiring token", path: "/api/user/self", token: profile, status: http.StatusOK},
 		{name: "pricing accepts a valid scoped token", path: "/api/pricing", token: usage, status: http.StatusOK},
 		{name: "pricing quote accepts a valid scoped token", path: "/api/pricing/quote", token: usage, status: http.StatusOK},
+		{name: "plan preview grants wallet read", path: "/api/subscription/plans/1/pricing", token: wallet, status: http.StatusOK},
+		{name: "plan quote grants wallet read", path: "/api/subscription/plans/1/pricing/quote", token: wallet, status: http.StatusOK},
+		{name: "plan preview denies profile scope", path: "/api/subscription/plans/1/pricing", token: profile, status: http.StatusForbidden, code: "ACCESS_TOKEN_SCOPE_DENIED", reason: "scope_denied"},
+		{name: "plan quote denies usage scope", path: "/api/subscription/plans/1/pricing/quote", token: usage, status: http.StatusForbidden, code: "ACCESS_TOKEN_SCOPE_DENIED", reason: "scope_denied"},
+		{name: "plan preview requires explicit read scope", path: "/api/subscription/plans/1/pricing", token: walletWrite, status: http.StatusForbidden, code: "ACCESS_TOKEN_SCOPE_DENIED", reason: "scope_denied"},
+		{name: "plan quote requires explicit read scope", path: "/api/subscription/plans/1/pricing/quote", token: walletWrite, status: http.StatusForbidden, code: "ACCESS_TOKEN_SCOPE_DENIED", reason: "scope_denied"},
+		{name: "plan preview denies expired wallet token", path: "/api/subscription/plans/1/pricing", token: expiredWallet, status: http.StatusUnauthorized, code: "ACCESS_TOKEN_EXPIRED", reason: "expired"},
+		{name: "plan quote denies expired wallet token", path: "/api/subscription/plans/1/pricing/quote", token: expiredWallet, status: http.StatusUnauthorized, code: "ACCESS_TOKEN_EXPIRED", reason: "expired"},
 		{name: "studio library granted usage scope", path: "/api/image-studio/library/tasks", token: usage, status: http.StatusOK},
 		{name: "studio library denies profile scope", path: "/api/image-studio/library/tasks", token: profile, status: http.StatusForbidden, code: "ACCESS_TOKEN_SCOPE_DENIED", reason: "scope_denied"},
 		{name: "studio generation setup requires browser session", path: "/pg/image-studio/config", token: usage, status: http.StatusForbidden, code: "AUTH_SESSION_REQUIRED", reason: "session_required"},
