@@ -1,6 +1,8 @@
 import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useEffect, useState } from 'react'
+import { resolveSiteBrand } from '@/lib/brand'
+import { useStatus } from '@/lib/status'
 import { useSiteBrand } from '@/lib/use-site-brand'
 
 export function SiteMark() {
@@ -30,14 +32,27 @@ export function SiteMark() {
 }
 
 export function SiteMetadata() {
-  const brand = useSiteBrand()
+  const status = useStatus()
+  const brand = resolveSiteBrand(status.data)
+  const serverName = document
+    .querySelector<HTMLMetaElement>('meta[name="new-api-system-name"]')
+    ?.content.trim()
+  // Server-rendered titles follow system settings even when assets have build branding.
+  const title =
+    serverName === undefined ? brand.title : status.data?.system_name?.trim() || serverName
+  const titleReady = Boolean(
+    serverName !== undefined ||
+    status.data ||
+    process.env.PUBLIC_SITE_TITLE?.trim() ||
+    process.env.PUBLIC_SITE_NAME?.trim(),
+  )
   useEffect(() => {
-    document.title = brand.title
+    if (titleReady && title) document.title = title
     document
       .querySelector('meta[name="description"]')
       ?.setAttribute('content', `${brand.description} Powered by New API · QuantumNous.`)
     document.querySelector('link[rel="icon"]')?.setAttribute('href', brand.logo || '/favicon.svg')
-  }, [brand.title, brand.description, brand.logo])
+  }, [titleReady, title, brand.description, brand.logo])
   return null
 }
 

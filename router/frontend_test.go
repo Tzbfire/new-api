@@ -8,6 +8,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"golang.org/x/oauth2"
 	"gorm.io/gorm"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,57 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFrontendInitialTitleUsesSiteSettings(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dir := t.TempDir()
+	t.Setenv("CONSUMER_FRONTEND_DIR", dir)
+	originalName := common.SystemName
+	originalEnabled := frontend_setting.GetFrontendSetting().Enabled
+	t.Cleanup(func() {
+		common.SystemName = originalName
+		frontend_setting.GetFrontendSetting().Enabled = originalEnabled
+	})
+	frontend_setting.GetFrontendSetting().Enabled = true
+	unchangedHead := `<script>window.example = "</title> &amp;";</script><link rel="stylesheet" href="/static/app.css?a=1&amp;b=2"><meta name="description" content="Powered by New API · QuantumNous">`
+	legacy := `<!doctype html><html><head><title>New API</title><meta name="title" content="New API">` + unchangedHead + `</head><body><script src="/static/app.js"></script></body></html>`
+	consumer := `<!doctype html><html><head><title>New API</title>` + unchangedHead + `</head><body><script src="/_factory/app.js"></script></body></html>`
+	r := gin.New()
+	r.NoRoute(serveConsumerFrontend([]byte(legacy)))
+	for _, tc := range []struct {
+		name, siteName, page, source, expectedTitle string
+	}{
+		{"consumer entry", "Example AI", "/", consumer, "Example AI"},
+		{"legacy admin", "Example AI", "/channels", consumer, "Example AI"},
+		{"consumer callback page", "Example AI", "/app/reset", consumer, "Example AI"},
+		{"settings update without rebuild", "Another AI", "/", consumer, "Another AI"},
+		{"escaped site name", `AI & 中文 </title><script>alert("x")</script>`, "/", consumer, html.EscapeString(`AI & 中文 </title><script>alert("x")</script>`)},
+		{"backend name overrides build title", "Example AI", "/", strings.ReplaceAll(consumer, "<title>New API</title>", `<title>Build AI</title><meta name="new-api-title-source" content="build">`), "Example AI"},
+		{"empty name keeps upstream default", " ", "/", consumer, "New API"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			common.SystemName = tc.siteName
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), []byte(tc.source), 0600))
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.page, nil))
+			require.Equal(t, http.StatusOK, w.Code)
+			assert.Contains(t, w.Body.String(), "<title>"+tc.expectedTitle+"</title>")
+			assert.Contains(t, w.Body.String(), unchangedHead)
+			_, expectedBody, _ := strings.Cut(tc.source, "</head>")
+			if tc.page == "/channels" {
+				_, expectedBody, _ = strings.Cut(legacy, "</head>")
+			}
+			assert.True(t, strings.HasSuffix(w.Body.String(), "</head>"+expectedBody))
+			assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+			if strings.TrimSpace(tc.siteName) != "" {
+				assert.Contains(t, w.Body.String(), `<meta name="new-api-system-name" content="`+html.EscapeString(tc.siteName)+`">`)
+			}
+			if tc.page == "/channels" {
+				assert.Contains(t, w.Body.String(), `<meta name="title" content="Example AI">`)
+			}
+		})
+	}
+}
 
 func TestFrontendRouting(t *testing.T) {
 	gin.SetMode(gin.TestMode)

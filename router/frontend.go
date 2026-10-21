@@ -1,7 +1,9 @@
 package router
 
 import (
+	"bytes"
 	_ "embed"
+	"html"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/setting/frontend_setting"
 	"github.com/gin-gonic/gin"
+	htmltoken "golang.org/x/net/html"
 )
 
 //go:embed frontend-preference.js
@@ -255,7 +258,7 @@ func serveConsumerFrontend(legacyIndex []byte) gin.HandlerFunc {
 				return
 			}
 			c.Header("X-Factory-Frontend", "consumer")
-			c.Data(http.StatusOK, "text/html; charset=utf-8", index)
+			c.Data(http.StatusOK, "text/html; charset=utf-8", renderFrontendIndex(index))
 			c.Abort()
 			return
 		}
@@ -385,8 +388,62 @@ func serveConsumerFrontend(legacyIndex []byte) gin.HandlerFunc {
 		c.Header("X-Factory-Frontend", version)
 		c.Header("Cache-Control", "no-store")
 		c.Writer.Header().Add("Vary", "Cookie")
-		c.Data(http.StatusOK, "text/html; charset=utf-8", body)
+		c.Data(http.StatusOK, "text/html; charset=utf-8", renderFrontendIndex(body))
 		c.Abort()
+	}
+}
+
+// renderFrontendIndex fills the initial title from the same cached settings as
+// /api/status. The public snapshot prevents client code from restoring stale titles.
+func renderFrontendIndex(index []byte) []byte {
+	common.OptionMapRWMutex.RLock()
+	name := strings.TrimSpace(common.SystemName)
+	common.OptionMapRWMutex.RUnlock()
+	if name == "" {
+		return index
+	}
+	escapedName := html.EscapeString(name)
+	tokens := htmltoken.NewTokenizer(bytes.NewReader(index))
+	var rendered bytes.Buffer
+	rendered.Grow(len(index) + len(escapedName))
+	inTitle := false
+	offset := 0
+	for {
+		kind := tokens.Next()
+		if kind == htmltoken.ErrorToken {
+			return index
+		}
+		// Token parsing can unescape attributes in the tokenizer's buffer.
+		raw := string(tokens.Raw())
+		offset += len(raw)
+		if kind == htmltoken.StartTagToken || kind == htmltoken.SelfClosingTagToken || kind == htmltoken.EndTagToken {
+			token := tokens.Token()
+			if token.Data == "meta" && kind != htmltoken.EndTagToken {
+				for _, attr := range token.Attr {
+					if attr.Key == "name" && attr.Val == "title" {
+						raw = `<meta name="title" content="` + escapedName + `">`
+						break
+					}
+				}
+			}
+			if token.Data == "title" {
+				inTitle = kind == htmltoken.StartTagToken
+				rendered.WriteString(raw)
+				if inTitle {
+					rendered.WriteString(escapedName)
+				}
+				continue
+			}
+			if token.Data == "head" && kind == htmltoken.EndTagToken || token.Data == "body" {
+				rendered.WriteString(`<meta name="new-api-system-name" content="` + escapedName + `">`)
+				rendered.WriteString(raw)
+				rendered.Write(index[offset:])
+				return rendered.Bytes()
+			}
+		}
+		if !inTitle {
+			rendered.WriteString(raw)
+		}
 	}
 }
 

@@ -23,7 +23,11 @@ beforeEach(() => {
   ])
     vi.stubEnv(key, '')
 })
-afterEach(() => vi.unstubAllEnvs())
+afterEach(() => {
+  vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
+  document.querySelector('meta[name="new-api-system-name"]')?.remove()
+})
 
 it('uses neutral defaults and accepts backend presentation without requiring site-specific code', () => {
   expect(resolveSiteBrand()).toMatchObject({
@@ -62,6 +66,137 @@ it('allows private build settings to override presentation without changing back
     description: 'Your private model platform',
     logo: '/private-logo.svg',
   })
+})
+
+it.each(['success', 'failure'])(
+  'keeps the server settings title over build values while loading and follows settings after %s',
+  async (outcome) => {
+    vi.stubEnv('PUBLIC_SITE_NAME', 'Build AI')
+    vi.stubEnv('PUBLIC_SITE_TITLE', 'Build title')
+    document.head.insertAdjacentHTML(
+      'beforeend',
+      '<meta name="new-api-system-name" content="中文 &amp; &quot;AI&quot; &lt;工场&gt;">',
+    )
+    let finish: ((value: Response) => void) | undefined
+    const pending = new Promise<Response>((resolve) => {
+      finish = resolve
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => pending),
+    )
+    document.title = '中文 & "AI" <工场>'
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const view = render(
+      <QueryClientProvider client={client}>
+        <SiteMetadata />
+      </QueryClientProvider>,
+    )
+    try {
+      expect(document.title).toBe('中文 & "AI" <工场>')
+      await act(async () =>
+        finish?.(
+          Response.json({
+            success: outcome === 'success',
+            data: { system_name: 'Updated settings AI' },
+            message: 'Unavailable',
+          }),
+        ),
+      )
+      await waitFor(() =>
+        expect(client.getQueryState(['status'])?.status).toBe(
+          outcome === 'success' ? 'success' : 'error',
+        ),
+      )
+      expect(document.title).toBe(
+        outcome === 'success' ? 'Updated settings AI' : '中文 & "AI" <工场>',
+      )
+    } finally {
+      view.unmount()
+      client.clear()
+    }
+  },
+)
+
+it.each(['success', 'failure'])(
+  'preserves the current title without server metadata until site settings finish with %s',
+  async (outcome) => {
+    let finish: ((value: Response) => void) | undefined
+    const pending = new Promise<Response>((resolve) => {
+      finish = resolve
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => pending),
+    )
+    document.title = 'Current AI'
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const view = render(
+      <QueryClientProvider client={client}>
+        <SiteMetadata />
+      </QueryClientProvider>,
+    )
+    try {
+      expect(document.title).toBe('Current AI')
+      await act(async () =>
+        finish?.(
+          Response.json({
+            success: outcome === 'success',
+            data: { system_name: 'Updated settings AI' },
+            message: 'Unavailable',
+          }),
+        ),
+      )
+      await waitFor(() =>
+        expect(client.getQueryState(['status'])?.status).toBe(
+          outcome === 'success' ? 'success' : 'error',
+        ),
+      )
+      expect(document.title).toBe(outcome === 'success' ? 'Updated settings AI' : 'Current AI')
+    } finally {
+      view.unmount()
+      client.clear()
+    }
+  },
+)
+
+it.each(['PUBLIC_SITE_NAME', 'PUBLIC_SITE_TITLE'])(
+  'preserves the %s build fallback when no server metadata is present',
+  (variable) => {
+    vi.stubEnv(variable, 'Build AI')
+    const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } })
+    const view = render(
+      <QueryClientProvider client={client}>
+        <SiteMetadata />
+      </QueryClientProvider>,
+    )
+    try {
+      expect(document.title).toBe('Build AI')
+    } finally {
+      view.unmount()
+      client.clear()
+    }
+  },
+)
+
+it('keeps the server settings title when the status response has no usable name', () => {
+  document.head.insertAdjacentHTML(
+    'beforeend',
+    '<meta name="new-api-system-name" content="Settings AI">',
+  )
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } })
+  client.setQueryData<SiteStatus>(['status'], { system_name: ' ' })
+  const view = render(
+    <QueryClientProvider client={client}>
+      <SiteMetadata />
+    </QueryClientProvider>,
+  )
+  try {
+    expect(document.title).toBe('Settings AI')
+  } finally {
+    view.unmount()
+    client.clear()
+  }
 })
 
 it('updates the visible brand and page metadata together when administrator settings change', async () => {

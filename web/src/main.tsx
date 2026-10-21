@@ -78,9 +78,15 @@ if (!rootElement) {
       ) as HTMLMetaElement | null
       if (metaTitle) metaTitle.setAttribute('content', name)
     }
-    // Cache-first
+    // Preserve the current server title over a potentially stale cached name.
     const cached = readCachedStatus()
-    if (cached?.system_name) apply(cached.system_name as string)
+    if (
+      !document.querySelector('meta[name="new-api-system-name"]') &&
+      document.title === 'New API' &&
+      cached?.system_name
+    ) {
+      apply(cached.system_name as string)
+    }
     if (cached?.logo) applyFaviconToDom(cached.logo as string)
 
     // Background refresh through the shared cache. This primes ['status']
