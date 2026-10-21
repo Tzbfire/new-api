@@ -8,8 +8,8 @@ import { useCatalog } from '@/lib/catalog'
 import { useStatus } from '@/lib/status'
 import { useSiteBrand } from '@/lib/use-site-brand'
 import { useSession } from '@/lib/session'
-import { readPreference, savePreference } from '@/lib/preferences'
-import { apiAddresses, ccSwitchLink, protocolBaseURL, type CCSwitchApp } from './api-addresses'
+import { APIAddressSelector, useAPIAddress } from './APIAddressSelector'
+import { ccSwitchLink, protocolBaseURL, type CCSwitchApp } from './api-addresses'
 import type { APIKey } from './types'
 
 export function CCSwitchImport(props: { apiKey: APIKey; onClose: () => void }) {
@@ -22,9 +22,7 @@ export function CCSwitchImport(props: { apiKey: APIKey; onClose: () => void }) {
   const [name, setName] = useState<string | null>(null)
   const connectionName = name ?? `${brand.name} · ${props.apiKey.name}`
   const [model, setModel] = useState('')
-  const [addressChoice, setAddressChoice] = useState(() =>
-    readPreference(`${session.user?.id || 'public'}:api-address`),
-  )
+  const { address } = useAPIAddress()
   const [secret, setSecret] = useState('')
   const [loadingKey, setLoadingKey] = useState(false)
   const [error, setError] = useState<unknown>(null)
@@ -36,8 +34,6 @@ export function CCSwitchImport(props: { apiKey: APIKey; onClose: () => void }) {
       active.current = false
     }
   }, [])
-  const addresses = apiAddresses(site.data, window.location.origin)
-  const address = addresses.find((item) => item.url === addressChoice) || addresses[0]
   const group = props.apiKey.group || session.user?.group || ''
   const models = useQuery({
     queryKey: ['key-import-models', session.user?.id, group],
@@ -124,23 +120,9 @@ export function CCSwitchImport(props: { apiKey: APIKey; onClose: () => void }) {
             disabled={locked}
           />
         </Field>
-        <SearchSelect
-          label={t('API address')}
-          value={address?.url || ''}
-          disabled={locked || site.isPending}
-          options={addresses.map((item) => ({
-            value: item.url,
-            label: item.label || t('Default API address'),
-            description: `${item.url} · ${item.description}`,
-          }))}
-          onValueChange={(value) => {
-            setAddressChoice(value)
-            savePreference(`${session.user?.id || 'public'}:api-address`, value)
-          }}
-        />
+        <APIAddressSelector disabled={locked} />
         {address && (
           <>
-            <p className="muted">{address.description}</p>
             <code className="secret-code">
               {protocolBaseURL(address.url, app === 'codex' ? 'openai' : 'native')}
             </code>

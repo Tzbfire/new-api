@@ -39,6 +39,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import { handleServerError } from '@/lib/handle-server-error'
 
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
@@ -63,6 +64,7 @@ import {
  * flattened back to dotted server keys only when persisting.
  */
 const oauthSchema = z.object({
+  oauth: z.object({ trusted_origins: z.string() }),
   GitHubOAuthEnabled: z.boolean(),
   GitHubClientId: z.string(),
   GitHubClientSecret: z.string(),
@@ -96,6 +98,7 @@ const oauthSchema = z.object({
 type OAuthFormValues = z.infer<typeof oauthSchema>
 
 type FlatOAuthDefaults = {
+  'oauth.trusted_origins': string
   GitHubOAuthEnabled: boolean
   GitHubClientId: string
   GitHubClientSecret: string
@@ -176,6 +179,7 @@ function OAuthSetupGuide(props: OAuthSetupGuideProps) {
 }
 
 const buildFormDefaults = (defaults: FlatOAuthDefaults): OAuthFormValues => ({
+  oauth: { trusted_origins: defaults['oauth.trusted_origins'] ?? '' },
   GitHubOAuthEnabled: defaults.GitHubOAuthEnabled,
   GitHubClientId: defaults.GitHubClientId ?? '',
   GitHubClientSecret: defaults.GitHubClientSecret ?? '',
@@ -210,6 +214,7 @@ const buildFormDefaults = (defaults: FlatOAuthDefaults): OAuthFormValues => ({
 })
 
 const normalizeFormValues = (values: OAuthFormValues): FlatOAuthDefaults => ({
+  'oauth.trusted_origins': values.oauth.trusted_origins,
   GitHubOAuthEnabled: values.GitHubOAuthEnabled,
   GitHubClientId: values.GitHubClientId,
   GitHubClientSecret: values.GitHubClientSecret,
@@ -297,6 +302,36 @@ export function OAuthSection(props: OAuthSectionProps) {
   }, [props.defaultValues, form])
 
   const onSubmit = async (values: OAuthFormValues) => {
+    const origins = values.oauth.trusted_origins
+      .split(/[,\r\n]+/)
+      .map((origin) => origin.trim())
+      .filter(Boolean)
+    for (const origin of origins) {
+      try {
+        const url = new URL(origin)
+        if (
+          /[\\?#%\s]/.test(origin) ||
+          /^https:\/\/[^/]*:$/.test(origin) ||
+          url.port === '0' ||
+          url.protocol !== 'https:' ||
+          url.username ||
+          url.password ||
+          url.pathname !== '/' ||
+          url.search ||
+          url.hash
+        ) {
+          throw new Error('Invalid origin')
+        }
+      } catch {
+        form.setError('oauth.trusted_origins', {
+          type: 'validate',
+          message: t(
+            'Enter HTTPS origins without paths, query strings, or credentials'
+          ),
+        })
+        return
+      }
+    }
     let finalValues = values
     const wellKnown = values.oidc.well_known.trim()
     const discoveryUrlChanged =
@@ -392,6 +427,36 @@ export function OAuthSection(props: OAuthSectionProps) {
               isResetDisabled={!form.formState.isDirty}
             />
             <FormDirtyIndicator isDirty={form.formState.isDirty} />
+
+            <FormField
+              control={form.control}
+              name='oauth.trusted_origins'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('OAuth trusted origins')}</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      {...field}
+                      placeholder={
+                        'https://app.example.com\nhttps://app.example.net'
+                      }
+                      rows={3}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Enter HTTPS origins separated by commas or new lines. Leave empty to use the primary site URL.'
+                    )}
+                  </FormDescription>
+                  <FormDescription>
+                    {t(
+                      'Register /oauth/{provider} on every trusted origin with each OAuth provider. API address publication does not authorize login origins.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             <Tabs value={activeTab} onValueChange={setActiveTab}>
               <TabsList className='grid w-full grid-cols-6'>

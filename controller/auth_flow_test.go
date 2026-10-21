@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/service"
@@ -193,75 +194,352 @@ func TestConsumerOAuthTokenExchangeUsesBoundRedirectAndPKCE(t *testing.T) {
 
 // Custom providers may expose HTTPS to browsers and HTTP only on a controlled internal network.
 func TestConsumerOAuthCustomInternalEndpointsCompleteLogin(t *testing.T) {
-	user, _ := setupSecurityEnrollmentTest(t)
-	previousAddress := system_setting.ServerAddress
-	system_setting.ServerAddress = "https://example.com"
-	t.Cleanup(func() { system_setting.ServerAddress = previousAddress })
-	var tokenForm url.Values
-	var userAuthorization string
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch req.URL.Path {
-		case "/token":
-			if err := req.ParseForm(); err != nil {
-				http.Error(w, "invalid fixture form", 400)
-				return
-			}
-			tokenForm = req.PostForm
-			_, _ = w.Write([]byte(`{"access_token":"synthetic-internal-token","token_type":"Bearer"}`))
-		case "/userinfo":
-			userAuthorization = req.Header.Get("Authorization")
-			_, _ = w.Write([]byte(`{"sub":"internal-fixture-user","name":"Fixture"}`))
-		default:
-			http.NotFound(w, req)
+	for _, origin := range []string{"https://primary.example", "https://secondary.example"} {
+		for _, consumer := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/consumer=%t", origin, consumer), func(t *testing.T) {
+				user, _ := setupSecurityEnrollmentTest(t)
+				previousAddress, previousSettings := system_setting.ServerAddress, system_setting.OAuthSettingsSnapshot()
+				previousSecure, previousTrusted := common.SessionCookieSecure, common.SessionCookieTrustedURLs
+				common.SessionCookieSecure, common.SessionCookieTrustedURLs = true, nil
+				system_setting.ServerAddress = "https://primary.example/"
+				*system_setting.GetOAuthSettings() = system_setting.OAuthSettings{TrustedOrigins: "https://secondary.example"}
+				t.Cleanup(func() {
+					system_setting.ServerAddress = previousAddress
+					*system_setting.GetOAuthSettings() = previousSettings
+					common.SessionCookieSecure, common.SessionCookieTrustedURLs = previousSecure, previousTrusted
+				})
+				var tokenForm url.Values
+				var userAuthorization string
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					switch req.URL.Path {
+					case "/token":
+						if err := req.ParseForm(); err != nil {
+							http.Error(w, "invalid fixture form", 400)
+							return
+						}
+						tokenForm = req.PostForm
+						_, _ = w.Write([]byte(`{"access_token":"synthetic-internal-token","token_type":"Bearer"}`))
+					case "/userinfo":
+						userAuthorization = req.Header.Get("Authorization")
+						_, _ = w.Write([]byte(`{"sub":"internal-fixture-user","name":"Fixture"}`))
+					default:
+						http.NotFound(w, req)
+					}
+				}))
+				t.Cleanup(upstream.Close)
+				const slug = "internal-fixture"
+				provider := oauth.NewGenericOAuthProvider(&model.CustomOAuthProvider{Id: 83, Slug: slug, Name: "Internal fixture", Enabled: true, ClientId: "synthetic-client", ClientSecret: "synthetic-secret", AuthorizationEndpoint: "https://identity.example/authorize", TokenEndpoint: upstream.URL + "/token", UserInfoEndpoint: upstream.URL + "/userinfo", UserIdField: "sub", AuthStyle: oauth.AuthStyleInParams})
+				require.NoError(t, oauth.RegisterCustom(slug, provider))
+				t.Cleanup(func() { oauth.Unregister(slug) })
+				require.NoError(t, model.DB.Create(&model.UserOAuthBinding{UserId: user.Id, ProviderId: 83, ProviderUserId: "internal-fixture-user"}).Error)
+				r := gin.New()
+				r.POST("/api/oauth/state", GenerateOAuthCode)
+				r.GET("/api/oauth/:provider", HandleOAuth)
+				r.POST("/api/user/auth/refresh", middleware.SessionCookieOriginGuard(), RefreshAuth)
+				r.POST("/api/user/auth/logout", middleware.SessionCookieOriginGuard(), AuthLogout)
+				startBody := map[string]string{"provider": slug, "intent": "login"}
+				if consumer {
+					startBody["callback_target"] = "consumer"
+				}
+				body, err := common.Marshal(startBody)
+				require.NoError(t, err)
+				req := httptest.NewRequest(http.MethodPost, "/api/oauth/state", strings.NewReader(string(body)))
+				req.Header.Set("Origin", origin)
+				req.Host = "spoofed.example"
+				req.Header.Set("Forwarded", "host=spoofed.example;proto=https")
+				req.Header.Set("X-Forwarded-Host", "spoofed.example")
+				start := httptest.NewRecorder()
+				r.ServeHTTP(start, req)
+				var response struct {
+					Success bool `json:"success"`
+					Data    struct {
+						FlowToken        string `json:"flow_token"`
+						AuthorizationURL string `json:"authorization_url"`
+					} `json:"data"`
+				}
+				require.NoError(t, common.Unmarshal(start.Body.Bytes(), &response))
+				require.True(t, response.Success, "configured internal HTTP endpoints must not fail OAuth start")
+				pending, err := model.GetAuthFlow(response.Data.FlowToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth, Provider: slug})
+				require.NoError(t, err)
+				var stored oauthFlowPayload
+				require.NoError(t, common.UnmarshalJsonStr(pending.Payload, &stored))
+				redirect := origin + "/oauth/" + slug
+				callbackPath, err := oauth.ConsumerCallbackPath(slug, response.Data.FlowToken)
+				require.NoError(t, err)
+				callbackReq := httptest.NewRequest(http.MethodGet, "/api/oauth/"+slug+"?state="+response.Data.FlowToken+"&code=synthetic-code&redirect_uri=https://spoofed.example", nil)
+				callbackReq.Header.Set("Referer", origin+"/oauth/"+slug)
+				challenge := ""
+				if consumer {
+					require.NotNil(t, stored.Consumer)
+					assert.Equal(t, origin, stored.Consumer.Origin)
+					assert.Equal(t, redirect, stored.Consumer.RedirectURI)
+					assert.Equal(t, "/app/oauth/"+slug, callbackPath)
+					authorization, err := url.Parse(response.Data.AuthorizationURL)
+					require.NoError(t, err)
+					assert.Equal(t, redirect, authorization.Query().Get("redirect_uri"))
+					assert.Equal(t, response.Data.FlowToken, authorization.Query().Get("state"))
+					assert.Equal(t, "S256", authorization.Query().Get("code_challenge_method"))
+					challenge = authorization.Query().Get("code_challenge")
+					require.NotEmpty(t, challenge)
+					require.Len(t, start.Result().Cookies(), 1)
+					callbackReq.AddCookie(start.Result().Cookies()[0])
+				} else {
+					assert.Nil(t, stored.Consumer)
+					assert.Equal(t, redirect, stored.RedirectURI)
+					assert.Empty(t, callbackPath, "a legacy flow must not navigate into the consumer callback")
+					assert.Empty(t, response.Data.AuthorizationURL)
+					assert.Empty(t, start.Result().Cookies())
+				}
+				otherOrigin := "https://secondary.example"
+				if origin == otherOrigin {
+					otherOrigin = "https://primary.example"
+				}
+				foreign := callbackReq.Clone(context.Background())
+				foreign.Header.Set("Origin", otherOrigin)
+				blocked := httptest.NewRecorder()
+				r.ServeHTTP(blocked, foreign)
+				assert.Equal(t, http.StatusForbidden, blocked.Code, "even a trusted foreign origin with the correct cookie cannot redeem this flow")
+				assert.Empty(t, blocked.Result().Cookies(), "foreign-origin rejection must not delete the browser binding")
+				assert.Nil(t, tokenForm, "origin rejection must happen before exchanging the code")
+				_, err = model.GetAuthFlow(response.Data.FlowToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth})
+				require.NoError(t, err)
+				if origin == "https://secondary.example" {
+					system_setting.GetOAuthSettings().TrustedOrigins = ""
+					revoked := httptest.NewRecorder()
+					r.ServeHTTP(revoked, callbackReq.Clone(context.Background()))
+					assert.Equal(t, http.StatusForbidden, revoked.Code, "removing a trusted origin revokes pending callbacks")
+					assert.Nil(t, tokenForm)
+					system_setting.GetOAuthSettings().TrustedOrigins = origin
+				}
+				result := httptest.NewRecorder()
+				r.ServeHTTP(result, callbackReq)
+				var login struct {
+					Success bool `json:"success"`
+					Data    struct {
+						AccessToken string `json:"access_token"`
+					} `json:"data"`
+				}
+				require.NoError(t, common.Unmarshal(result.Body.Bytes(), &login))
+				require.True(t, login.Success, "the original browser must complete login after foreign-origin rejection")
+				assert.NotEmpty(t, login.Data.AccessToken)
+				assert.Equal(t, redirect, tokenForm.Get("redirect_uri"))
+				if consumer {
+					assert.Equal(t, challenge, oauth2.S256ChallengeFromVerifier(tokenForm.Get("code_verifier")))
+				} else {
+					assert.Empty(t, tokenForm.Get("code_verifier"))
+				}
+				assert.Equal(t, "Bearer synthetic-internal-token", userAuthorization)
+				replay := httptest.NewRecorder()
+				r.ServeHTTP(replay, callbackReq.Clone(context.Background()))
+				assert.Equal(t, http.StatusForbidden, replay.Code)
+
+				var refreshCookie *http.Cookie
+				for _, cookie := range result.Result().Cookies() {
+					if cookie.Name == service.RefreshCookieName {
+						refreshCookie = cookie
+					}
+				}
+				require.NotNil(t, refreshCookie)
+				assert.True(t, refreshCookie.Secure)
+				assert.True(t, refreshCookie.HttpOnly)
+				assert.Empty(t, refreshCookie.Domain)
+				parsedOrigin, err := url.Parse(origin)
+				require.NoError(t, err)
+				refreshReq := httptest.NewRequest(http.MethodPost, "http://"+parsedOrigin.Host+"/api/user/auth/refresh", nil)
+				refreshReq.Header.Set("Origin", origin)
+				refreshReq.AddCookie(refreshCookie)
+				refreshed := httptest.NewRecorder()
+				r.ServeHTTP(refreshed, refreshReq)
+				assert.Equal(t, http.StatusOK, refreshed.Code, "TLS-terminating proxies must support session refresh on each configured origin")
+				assert.Contains(t, refreshed.Body.String(), `"success":true`)
+				refreshCookie = nil
+				for _, cookie := range refreshed.Result().Cookies() {
+					if cookie.Name == service.RefreshCookieName {
+						refreshCookie = cookie
+					}
+				}
+				require.NotNil(t, refreshCookie)
+				logoutReq := httptest.NewRequest(http.MethodPost, "http://"+parsedOrigin.Host+"/api/user/auth/logout", nil)
+				logoutReq.Header.Set("Origin", origin)
+				logoutReq.AddCookie(refreshCookie)
+				loggedOut := httptest.NewRecorder()
+				r.ServeHTTP(loggedOut, logoutReq)
+				assert.Equal(t, http.StatusOK, loggedOut.Code)
+				assert.Contains(t, loggedOut.Body.String(), `"success":true`)
+				require.NotEmpty(t, loggedOut.Result().Cookies())
+				for _, cookie := range loggedOut.Result().Cookies() {
+					assert.Equal(t, -1, cookie.MaxAge)
+				}
+				postLogout := httptest.NewRecorder()
+				refreshAfterLogout := httptest.NewRequest(http.MethodPost, refreshReq.URL.String(), nil)
+				refreshAfterLogout.Header.Set("Origin", origin)
+				refreshAfterLogout.AddCookie(refreshCookie)
+				r.ServeHTTP(postLogout, refreshAfterLogout)
+				assert.Equal(t, http.StatusUnauthorized, postLogout.Code)
+			})
 		}
-	}))
-	t.Cleanup(upstream.Close)
-	const slug = "internal-fixture"
-	provider := oauth.NewGenericOAuthProvider(&model.CustomOAuthProvider{Id: 83, Slug: slug, Name: "Internal fixture", Enabled: true, ClientId: "synthetic-client", ClientSecret: "synthetic-secret", AuthorizationEndpoint: "https://identity.example/authorize", TokenEndpoint: upstream.URL + "/token", UserInfoEndpoint: upstream.URL + "/userinfo", UserIdField: "sub", AuthStyle: oauth.AuthStyleInParams})
-	require.NoError(t, oauth.RegisterCustom(slug, provider))
-	t.Cleanup(func() { oauth.Unregister(slug) })
-	require.NoError(t, model.DB.Create(&model.UserOAuthBinding{UserId: user.Id, ProviderId: 83, ProviderUserId: "internal-fixture-user"}).Error)
+	}
+}
+
+func TestOAuthTrustedOriginsSettingsAndRequestValidation(t *testing.T) {
+	setupAuthFlowControllerTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Option{}))
+	previousAddress, previousSettings := system_setting.ServerAddress, system_setting.OAuthSettingsSnapshot()
+	previousOptions := common.OptionMap
+	previousSecure, previousTrusted := common.SessionCookieSecure, common.SessionCookieTrustedURLs
+	common.OptionMap = make(map[string]string)
+	system_setting.ServerAddress = "https://primary.example/"
+	common.SessionCookieSecure, common.SessionCookieTrustedURLs = true, []string{"https://admin.example"}
+	t.Cleanup(func() {
+		system_setting.ServerAddress = previousAddress
+		*system_setting.GetOAuthSettings() = previousSettings
+		common.OptionMap = previousOptions
+		common.SessionCookieSecure, common.SessionCookieTrustedURLs = previousSecure, previousTrusted
+	})
+	router := gin.New()
+	router.PUT("/api/option", UpdateOption)
+	const trusted = "https://secondary.example,https://secondary.example:8443"
+	for _, test := range []struct {
+		name, value string
+		valid       bool
+	}{
+		{"normalize", " https://SECONDARY.example:443/ ,\nhttps://secondary.example\nhttps://secondary.example:8443", true},
+		{"http", "http://secondary.example", false},
+		{"userinfo", "https://user@secondary.example", false},
+		{"path", "https://secondary.example/oauth/acme", false},
+		{"query", "https://secondary.example?", false},
+		{"fragment", "https://secondary.example#", false},
+		{"invalid port", "https://secondary.example:65536", false},
+		{"empty port", "https://secondary.example:", false},
+		{"port zero", "https://secondary.example:0", false},
+		{"encoded host", "https://second%61ry.example", false},
+		{"wildcard", "https://*.example", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := common.Marshal(map[string]string{"key": "oauth.trusted_origins", "value": test.value})
+			require.NoError(t, err)
+			result := httptest.NewRecorder()
+			router.ServeHTTP(result, httptest.NewRequest(http.MethodPut, "/api/option", strings.NewReader(string(body))))
+			if test.valid {
+				assert.Equal(t, http.StatusOK, result.Code)
+				assert.Contains(t, result.Body.String(), `"success":true`)
+			} else {
+				assert.Equal(t, http.StatusBadRequest, result.Code)
+				assert.Error(t, model.UpdateOption("oauth.trusted_origins", test.value))
+				assert.Error(t, model.UpdateOptionsBulk(map[string]string{"oauth.trusted_origins": test.value}))
+			}
+			assert.Equal(t, trusted, system_setting.OAuthSettingsSnapshot().TrustedOrigins)
+			var saved model.Option
+			require.NoError(t, model.DB.Where("key = ?", "oauth.trusted_origins").First(&saved).Error)
+			assert.Equal(t, trusted, saved.Value, "invalid settings must leave the last saved trust list intact")
+		})
+	}
+	for _, test := range []struct {
+		name          string
+		origins       []string
+		referer, want string
+	}{
+		{name: "primary", origins: []string{"https://primary.example"}, want: "https://primary.example"},
+		{name: "secondary", origins: []string{"https://secondary.example"}, want: "https://secondary.example"},
+		{name: "nondefault port", origins: []string{"https://secondary.example:8443"}, want: "https://secondary.example:8443"},
+		{name: "secure environment", origins: []string{"https://admin.example"}, want: "https://admin.example"},
+		{name: "referer", referer: "https://secondary.example/oauth/acme?code=synthetic", want: "https://secondary.example"},
+		{name: "missing"},
+		{name: "duplicate origin", origins: []string{"https://primary.example", "https://secondary.example"}},
+		{name: "origin list", origins: []string{"https://primary.example,https://secondary.example"}},
+		{name: "untrusted", origins: []string{"https://outside.example"}},
+		{name: "suffix", origins: []string{"https://secondary.example.outside.example"}},
+		{name: "port mismatch", origins: []string{"https://secondary.example:8444"}},
+		{name: "invalid origin cannot use referer", origins: []string{"null"}, referer: "https://secondary.example/login"},
+		{name: "query", origins: []string{"https://secondary.example?"}},
+		{name: "fragment", origins: []string{"https://secondary.example#"}},
+		{name: "path", origins: []string{"https://secondary.example/login"}},
+		{name: "referer credentials", referer: "https://user@secondary.example/login"},
+		{name: "referer fragment", referer: "https://secondary.example/login#invalid"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "https://secondary.example/api/oauth/state", nil)
+			req.Header.Set("X-Forwarded-Host", "secondary.example")
+			req.Header.Set("X-Forwarded-Proto", "https")
+			for _, origin := range test.origins {
+				req.Header.Add("Origin", origin)
+			}
+			if test.referer != "" {
+				req.Header.Set("Referer", test.referer)
+			}
+			actual, err := oauth.ConsumerOAuthRequestOrigin(req)
+			if test.want == "" {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, test.want, actual)
+		})
+	}
+}
+
+func TestOAuthTrustedOriginsSessionGuard(t *testing.T) {
+	previousAddress, previousSettings := system_setting.ServerAddress, system_setting.OAuthSettingsSnapshot()
+	previousSecure, previousTrusted := common.SessionCookieSecure, common.SessionCookieTrustedURLs
+	system_setting.ServerAddress = "https://primary.example/"
+	system_setting.GetOAuthSettings().TrustedOrigins = "https://secondary.example,https://secondary.example:8443"
+	common.SessionCookieSecure, common.SessionCookieTrustedURLs = true, []string{"https://admin.example"}
+	t.Cleanup(func() {
+		system_setting.ServerAddress = previousAddress
+		*system_setting.GetOAuthSettings() = previousSettings
+		common.SessionCookieSecure, common.SessionCookieTrustedURLs = previousSecure, previousTrusted
+	})
 	r := gin.New()
-	r.POST("/api/oauth/state", GenerateOAuthCode)
-	r.GET("/api/oauth/:provider", HandleOAuth)
-	req := httptest.NewRequest(http.MethodPost, "/api/oauth/state", strings.NewReader(`{"provider":"internal-fixture","intent":"login","callback_target":"consumer"}`))
-	req.Header.Set("Origin", "https://example.com")
-	start := httptest.NewRecorder()
-	r.ServeHTTP(start, req)
-	var response struct {
-		Success bool `json:"success"`
-		Data    struct {
-			FlowToken        string `json:"flow_token"`
-			AuthorizationURL string `json:"authorization_url"`
-		} `json:"data"`
+	r.POST("/refresh", middleware.SessionCookieOriginGuard(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	for _, test := range []struct {
+		name, target, origin, referer string
+		allowed                       bool
+	}{
+		{"primary proxy", "http://primary.example/refresh", "https://primary.example", "", true},
+		{"secondary proxy", "http://secondary.example/refresh", "https://secondary.example", "", true},
+		{"secondary port", "http://secondary.example:8443/refresh", "https://secondary.example:8443", "", true},
+		{"referer", "http://secondary.example/refresh", "", "https://secondary.example/account?tab=security", true},
+		{"cross host", "http://primary.example/refresh", "https://secondary.example", "", false},
+		{"cross port", "http://secondary.example:8443/refresh", "https://secondary.example", "", false},
+		{"untrusted proxy", "http://outside.example/refresh", "https://outside.example", "", false},
+		{"suffix", "http://secondary.example.outside.example/refresh", "https://secondary.example.outside.example", "", false},
+		{"missing", "http://secondary.example/refresh", "", "", false},
+		{"bad origin no fallback", "http://secondary.example/refresh", "null", "https://secondary.example/login", false},
+		{"bare query", "http://secondary.example/refresh", "https://secondary.example?", "", false},
+		{"bare fragment", "http://secondary.example/refresh", "https://secondary.example#", "", false},
+		{"uppercase scheme query", "http://secondary.example/refresh", "HTTPS://secondary.example?", "", false},
+		{"uppercase scheme fragment", "http://secondary.example/refresh", "HTTPS://secondary.example#", "", false},
+		{"uppercase scheme empty port", "http://secondary.example/refresh", "HTTPS://secondary.example:", "", false},
+		{"invalid port", "http://secondary.example:65536/refresh", "https://secondary.example:65536", "", false},
+		{"environment retains behavior", "http://primary.example/refresh", "https://admin.example", "", true},
+		{"actual TLS retains behavior", "https://another.example/refresh", "https://another.example", "", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, test.target, nil)
+			if test.origin != "" {
+				req.Header.Set("Origin", test.origin)
+			}
+			if test.referer != "" {
+				req.Header.Set("Referer", test.referer)
+			}
+			req.Header.Set("X-Forwarded-Host", "secondary.example")
+			req.Header.Set("X-Forwarded-Proto", "https")
+			response := httptest.NewRecorder()
+			r.ServeHTTP(response, req)
+			if test.allowed {
+				assert.Equal(t, http.StatusNoContent, response.Code)
+			} else {
+				assert.Equal(t, http.StatusForbidden, response.Code)
+			}
+		})
 	}
-	require.NoError(t, common.Unmarshal(start.Body.Bytes(), &response))
-	require.True(t, response.Success, "configured internal HTTP endpoints must not fail OAuth start")
-	authorization, err := url.Parse(response.Data.AuthorizationURL)
-	require.NoError(t, err)
-	assert.Equal(t, "https://example.com/oauth/"+slug, authorization.Query().Get("redirect_uri"))
-	require.Len(t, start.Result().Cookies(), 1)
-	callbackReq := httptest.NewRequest(http.MethodGet, "/api/oauth/"+slug+"?state="+response.Data.FlowToken+"&code=synthetic-code", nil)
-	callbackReq.Header.Set("Referer", "https://example.com/login")
-	callbackReq.AddCookie(start.Result().Cookies()[0])
-	result := httptest.NewRecorder()
-	r.ServeHTTP(result, callbackReq)
-	var login struct {
-		Success bool `json:"success"`
-		Data    struct {
-			AccessToken string `json:"access_token"`
-		} `json:"data"`
-	}
-	require.NoError(t, common.Unmarshal(result.Body.Bytes(), &login))
-	require.True(t, login.Success, "internal custom OAuth callback must complete login")
-	assert.NotEmpty(t, login.Data.AccessToken)
-	assert.Equal(t, "https://example.com/oauth/"+slug, tokenForm.Get("redirect_uri"))
-	assert.Equal(t, authorization.Query().Get("code_challenge"), oauth2.S256ChallengeFromVerifier(tokenForm.Get("code_verifier")))
-	assert.Equal(t, "Bearer synthetic-internal-token", userAuthorization)
-	replay := httptest.NewRecorder()
-	r.ServeHTTP(replay, callbackReq.Clone(context.Background()))
-	assert.Equal(t, http.StatusForbidden, replay.Code)
+	system_setting.GetOAuthSettings().TrustedOrigins = ""
+	req := httptest.NewRequest(http.MethodPost, "http://secondary.example/refresh", nil)
+	req.Header.Set("Origin", "https://secondary.example")
+	denied := httptest.NewRecorder()
+	r.ServeHTTP(denied, req)
+	assert.Equal(t, http.StatusForbidden, denied.Code, "trust removal also revokes cookie refresh on a proxy origin")
 }
 
 func TestConsumerOAuthCallbackSelectsOnlyValidConsumerFlows(t *testing.T) {

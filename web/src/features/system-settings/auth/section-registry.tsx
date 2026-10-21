@@ -49,6 +49,7 @@ const AUTH_SECTIONS = [
       <OAuthSection
         serverAddress={settings.ServerAddress}
         defaultValues={{
+          'oauth.trusted_origins': settings['oauth.trusted_origins'],
           GitHubOAuthEnabled: settings.GitHubOAuthEnabled,
           GitHubClientId: settings.GitHubClientId,
           GitHubClientSecret: settings.GitHubClientSecret,

@@ -266,6 +266,11 @@ export function ApiInfoSection({ enabled, data }: ApiInfoSectionProps) {
   return (
     <SettingsSection title={t('API Addresses')}>
       <div className='space-y-4'>
+        <p className='text-muted-foreground text-sm'>
+          {t(
+            'Publish API addresses and descriptions for users on the API Keys page. These addresses do not authorize OAuth login origins.'
+          )}
+        </p>
         <div className='flex flex-wrap items-center justify-between gap-2'>
           <div className='flex flex-wrap items-center gap-2'>
             <Button onClick={handleAdd} size='sm'>
@@ -392,7 +397,9 @@ export function ApiInfoSection({ enabled, data }: ApiInfoSectionProps) {
         open={showDialog}
         onOpenChange={setShowDialog}
         title={editingApiInfo ? t('Edit API Shortcut') : t('Add API Shortcut')}
-        description={t('Configure API documentation links for the dashboard')}
+        description={t(
+          'Publish API addresses and descriptions for users on the API Keys page. These addresses do not authorize OAuth login origins.'
+        )}
         contentHeight='auto'
         bodyClassName='space-y-4'
         footer={
@@ -437,7 +444,7 @@ export function ApiInfoSection({ enabled, data }: ApiInfoSectionProps) {
               name='route'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Route Description')}</FormLabel>
+                  <FormLabel>{t('Display name')}</FormLabel>
                   <FormControl>
                     <Input placeholder={t('e.g., CN2 GIA')} {...field} />
                   </FormControl>

@@ -26,6 +26,7 @@ import { useSession } from '@/lib/session'
 import '../wallet/wallet.css'
 import { KeyEditor } from './KeyEditor'
 import { KeyModelsDialog } from './KeyModelsDialog'
+import { APIAddressSelector } from './APIAddressSelector'
 import { IntegrationGuide } from './IntegrationGuide'
 import { CCSwitchImport } from './CCSwitchImport'
 import type { APIKey } from './types'
@@ -125,6 +126,7 @@ export default function KeysPage() {
           </>
         }
       />
+      <APIAddressSelector inline />
       {catalog.requestedModel &&
         catalog.models.some((model) => model.model_name === catalog.requestedModel) && (
           <div className="keys-context-note">

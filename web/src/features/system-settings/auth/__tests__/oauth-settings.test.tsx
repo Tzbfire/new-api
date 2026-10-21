@@ -40,6 +40,7 @@ import { SettingsPageProvider } from '../../components/settings-page-context'
 import { OAuthSection } from '../oauth-section'
 
 const defaults: ComponentProps<typeof OAuthSection>['defaultValues'] = {
+  'oauth.trusted_origins': '',
   GitHubOAuthEnabled: false,
   GitHubClientId: '',
   GitHubClientSecret: '',
@@ -114,6 +115,63 @@ beforeEach(async () => {
 })
 
 describe('OAuth settings saves', () => {
+  it('saves trusted origins independently and resets edits to the saved list', async () => {
+    const user = userEvent.setup()
+    await renderSettings()
+    const origins = screen.getByRole('textbox', {
+      name: 'OAuth trusted origins',
+    })
+    await user.type(origins, 'https://app.example.com,https://app.example.net')
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith('/api/option/', {
+        key: 'oauth.trusted_origins',
+        value: 'https://app.example.com,https://app.example.net',
+      })
+    )
+    expect(api.put).toHaveBeenCalledTimes(1)
+    await user.clear(origins)
+    await user.click(screen.getByRole('button', { name: 'Reset' }))
+    expect(origins).toHaveValue(
+      'https://app.example.com,https://app.example.net'
+    )
+  })
+
+  it('saves an empty trusted origin list to restore the primary site fallback', async () => {
+    const user = userEvent.setup()
+    await renderSettings({ 'oauth.trusted_origins': 'https://app.example.com' })
+    await user.clear(
+      screen.getByRole('textbox', { name: 'OAuth trusted origins' })
+    )
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith('/api/option/', {
+        key: 'oauth.trusted_origins',
+        value: '',
+      })
+    )
+  })
+
+  it.each([
+    'http://app.example.com',
+    'https://app.example.com?',
+    'https://app.example.com#',
+    'https://app.example.com:',
+    'https://app.example.com:0',
+    'https://app.example.com/\\path',
+    'https://app.example.com/path',
+    'https://user:pass@app.example.com',
+    'https://app.example.com?next=x',
+  ])('rejects unsafe trusted origin %s before saving', async (origin) => {
+    const user = userEvent.setup()
+    await renderSettings()
+    const field = screen.getByRole('textbox', { name: 'OAuth trusted origins' })
+    await user.type(field, origin)
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+    expect(field).toHaveAttribute('aria-invalid', 'true')
+    expect(api.put).not.toHaveBeenCalled()
+  })
+
   it.each([
     [false, 'provider.example.com/discovery'],
     [true, 'provider.example.com/discovery'],

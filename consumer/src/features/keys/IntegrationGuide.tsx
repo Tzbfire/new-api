@@ -6,8 +6,8 @@ import { Button, CopyButton, Modal, LoadingState, ErrorState } from '@/component
 import { useCatalog } from '@/lib/catalog'
 import { useStatus } from '@/lib/status'
 import { useSession } from '@/lib/session'
-import { readPreference, savePreference } from '@/lib/preferences'
-import { apiAddresses, protocolBaseURL } from './api-addresses'
+import { APIAddressSelector, useAPIAddress } from './APIAddressSelector'
+import { protocolBaseURL } from './api-addresses'
 
 /** 接入示例只使用占位环境变量，不读取或嵌入用户实际密钥。 */
 export function IntegrationGuide() {
@@ -16,11 +16,7 @@ export function IntegrationGuide() {
   const site = useStatus()
   const session = useSession()
   const [open, setOpen] = useState(false)
-  const [chosenAddress, setChosenAddress] = useState(() =>
-    readPreference(`${session.user?.id || 'public'}:api-address`),
-  )
-  const addresses = apiAddresses(site.data, window.location.origin)
-  const address = addresses.find((item) => item.url === chosenAddress) || addresses[0]
+  const { address } = useAPIAddress()
   const endpoint = address ? protocolBaseURL(address.url, 'openai') : ''
   const [selection, setSelection] = useState({ intentKey: '', group: '', model: '' })
   const chatModels = catalog.models.filter(
@@ -63,21 +59,7 @@ export function IntegrationGuide() {
           <p className="muted">{t('Choose an address or import a key into CC Switch.')}</p>
           {site.isPending && <LoadingState />}
           {site.error && <ErrorState error={site.error} retry={() => void site.refetch()} />}
-          <SearchSelect
-            label={t('API address')}
-            value={address?.url || ''}
-            options={addresses.map((item) => ({
-              value: item.url,
-              label: item.label || t('Default API address'),
-              description: `${item.url} · ${item.description}`,
-            }))}
-            onValueChange={(value) => {
-              setChosenAddress(value)
-              savePreference(`${session.user?.id || 'public'}:api-address`, value)
-            }}
-            disabled={site.isPending || !addresses.length}
-          />
-          {address?.description && <p className="muted">{address.description}</p>}
+          <APIAddressSelector />
           <p className="muted">
             {t(
               'Use this base URL in an OpenAI-compatible app. Store your API key in NEW_API_KEY and replace YOUR_MODEL with a model supported by your key’s service group.',

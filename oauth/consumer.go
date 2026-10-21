@@ -17,59 +17,142 @@ import (
 )
 
 const consumerOAuthContextKey = "consumer_oauth_callback"
+const legacyOAuthRedirectContextKey = "legacy_oauth_redirect"
 
 var consumerProviderSlug = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // ConsumerOAuthFlow 只保存服务器构造的回调地址与 PKCE 秘密，不接受客户端 URL。
 type ConsumerOAuthFlow struct {
+	Origin       string `json:"origin,omitempty"`
 	RedirectURI  string `json:"redirect_uri"`
 	CodeVerifier string `json:"code_verifier"`
 	BrowserHash  string `json:"browser_hash"`
 }
 
-// ConsumerCallbackURI 保持原控制台回调不变，为独立用户前端生成固定同源路径。
-func ConsumerCallbackURI(provider string) (string, error) {
-	if len(provider) > 128 || !consumerProviderSlug.MatchString(provider) {
+// ConsumerCallbackURI constructs a fixed callback on a currently trusted origin.
+// Without an explicit origin it retains the configured server-address default.
+func ConsumerCallbackURI(provider string, origins ...string) (string, error) {
+	if len(provider) > 128 || !consumerProviderSlug.MatchString(provider) || len(origins) > 1 {
 		return "", errors.New("invalid consumer OAuth provider")
 	}
-	origin, err := common.NormalizeOrigin(system_setting.ServerAddress)
-	if err != nil || !strings.HasPrefix(origin, "https://") {
-		return "", errors.New("consumer OAuth requires a configured HTTPS server address")
+	common.OptionMapRWMutex.RLock()
+	origin := system_setting.ServerAddress
+	common.OptionMapRWMutex.RUnlock()
+	if len(origins) == 1 {
+		origin = origins[0]
+	}
+	origin, err := system_setting.NormalizeOAuthOrigin(origin)
+	if err != nil || !consumerOAuthOriginTrusted(origin) {
+		return "", errors.New("consumer OAuth requires a trusted HTTPS origin")
 	}
 	return origin + "/oauth/" + provider, nil
 }
 
-// ConsumerOAuthOriginAllowed 将消费者认证请求绑定到配置的精确 HTTPS 源。
-func ConsumerOAuthOriginAllowed(request *http.Request) bool {
-	expected, err := common.NormalizeOrigin(system_setting.ServerAddress)
-	if err != nil || !strings.HasPrefix(expected, "https://") {
+func consumerOAuthOriginTrusted(origin string) bool {
+	if !strings.HasPrefix(origin, "https://") {
 		return false
+	}
+	common.OptionMapRWMutex.RLock()
+	serverAddress := system_setting.ServerAddress
+	common.OptionMapRWMutex.RUnlock()
+	if expected, err := system_setting.NormalizeOAuthOrigin(serverAddress); err == nil && origin == expected {
+		return true
+	}
+	settings := system_setting.OAuthSettingsSnapshot()
+	if normalized, err := system_setting.NormalizeOAuthTrustedOrigins(settings.TrustedOrigins); err == nil {
+		for trusted := range strings.SplitSeq(normalized, ",") {
+			if origin == trusted {
+				return true
+			}
+		}
+	}
+	if common.SessionCookieSecure {
+		for _, trusted := range common.SessionCookieTrustedURLs {
+			if normalized, err := system_setting.NormalizeOAuthOrigin(trusted); err == nil && origin == normalized {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ConsumerOAuthRequestOrigin accepts only explicit browser metadata and an exact
+// configured HTTPS origin. Proxy and Host headers cannot select a callback.
+func ConsumerOAuthRequestOrigin(request *http.Request) (string, error) {
+	if request == nil {
+		return "", errors.New("missing consumer OAuth request")
 	}
 	values := request.Header.Values("Origin")
+	raw := ""
 	if len(values) > 0 {
-		if len(values) != 1 {
-			return false
+		if len(values) != 1 || strings.Contains(values[0], ",") {
+			return "", errors.New("invalid consumer OAuth origin")
 		}
-		actual, err := common.NormalizeOrigin(values[0])
-		return err == nil && actual == expected
+		raw = values[0]
+	} else {
+		values = request.Header.Values("Referer")
+		if len(values) != 1 {
+			return "", errors.New("missing consumer OAuth origin")
+		}
+		rawReferer := strings.TrimSpace(values[0])
+		referer, err := url.Parse(rawReferer)
+		if err != nil || referer.User != nil || referer.Scheme == "" || referer.Host == "" || strings.ContainsAny(rawReferer, "\\#\r\n") {
+			return "", errors.New("invalid consumer OAuth referer")
+		}
+		raw = referer.Scheme + "://" + referer.Host
 	}
-	values = request.Header.Values("Referer")
-	if len(values) != 1 {
+	origin, err := system_setting.NormalizeOAuthOrigin(raw)
+	if err != nil || !consumerOAuthOriginTrusted(origin) {
+		return "", errors.New("untrusted consumer OAuth origin")
+	}
+	return origin, nil
+}
+
+func ConsumerOAuthOriginAllowed(request *http.Request) bool {
+	_, err := ConsumerOAuthRequestOrigin(request)
+	return err == nil
+}
+
+// callbackOrigin also supports server-owned flows issued before Origin was saved.
+// Only the two fixed consumer callback paths are valid for those legacy flows.
+func (flow *ConsumerOAuthFlow) callbackOrigin(provider string) (string, error) {
+	if flow == nil {
+		return "", errors.New("invalid consumer OAuth flow")
+	}
+	callback, err := url.Parse(flow.RedirectURI)
+	if err != nil || callback.User != nil || callback.RawQuery != "" || callback.Fragment != "" {
+		return "", errors.New("invalid consumer OAuth callback")
+	}
+	origin, err := system_setting.NormalizeOAuthOrigin(callback.Scheme + "://" + callback.Host)
+	if err != nil || !consumerOAuthOriginTrusted(origin) {
+		return "", errors.New("untrusted consumer OAuth callback")
+	}
+	if flow.Origin != "" && flow.Origin != origin {
+		return "", errors.New("mismatched consumer OAuth origin")
+	}
+	expected, err := ConsumerCallbackURI(provider, origin)
+	if err != nil || (flow.RedirectURI != expected && flow.RedirectURI != origin+"/app/oauth/"+provider) {
+		return "", errors.New("invalid consumer OAuth callback")
+	}
+	return origin, nil
+}
+
+func (flow *ConsumerOAuthFlow) MatchesRequestOrigin(request *http.Request) bool {
+	origin, err := ConsumerOAuthRequestOrigin(request)
+	if err != nil || flow == nil {
 		return false
 	}
-	referer, err := url.Parse(values[0])
-	if err != nil || referer.User != nil {
+	callback, err := url.Parse(flow.RedirectURI)
+	if err != nil {
 		return false
 	}
-	actual, err := common.NormalizeOrigin(referer.Scheme + "://" + referer.Host)
-	return err == nil && actual == expected
+	storedOrigin, err := system_setting.NormalizeOAuthOrigin(callback.Scheme + "://" + callback.Host)
+	return err == nil && origin == storedOrigin && (flow.Origin == "" || flow.Origin == storedOrigin)
 }
 
 func (flow *ConsumerOAuthFlow) validForProvider(provider string) bool {
-	expected, err := ConsumerCallbackURI(provider)
-	return err == nil && flow != nil &&
-		(flow.RedirectURI == expected || flow.RedirectURI == strings.Replace(expected, "/oauth/", "/app/oauth/", 1)) &&
-		len(flow.CodeVerifier) >= 43 && flow.BrowserHash != ""
+	_, err := flow.callbackOrigin(provider)
+	return err == nil && len(flow.CodeVerifier) >= 43 && flow.BrowserHash != ""
 }
 
 // SetConsumerOAuthFlow 只能在验证服务器 flow 和浏览器绑定后调用。
@@ -111,8 +194,41 @@ func ConsumerCallbackPath(provider, state string) (string, error) {
 	return "/app/oauth/" + provider, nil
 }
 
+// LegacyOAuthUsesBrowserRedirect identifies dashboard providers whose existing
+// authorization builders use the browser origin rather than ServerAddress.
+func LegacyOAuthUsesBrowserRedirect(provider string) bool {
+	switch GetProvider(provider).(type) {
+	case *GenericOAuthProvider, *DiscordProvider, *OIDCProvider:
+		return true
+	default:
+		return false
+	}
+}
+
+// SetLegacyOAuthRedirect validates a stored dashboard callback before exchange.
+// It intentionally does not mark the flow as a consumer popup login.
+func SetLegacyOAuthRedirect(c *gin.Context, provider, redirectURI string) error {
+	if !LegacyOAuthUsesBrowserRedirect(provider) {
+		return errors.New("invalid dashboard OAuth provider")
+	}
+	flow := &ConsumerOAuthFlow{RedirectURI: redirectURI}
+	if _, err := flow.callbackOrigin(provider); err != nil {
+		return err
+	}
+	if !flow.MatchesRequestOrigin(c.Request) {
+		return errors.New("mismatched dashboard OAuth origin")
+	}
+	c.Set(legacyOAuthRedirectContextKey, redirectURI)
+	return nil
+}
+
 // ApplyConsumerOAuthExchange 将已验证 flow 的回调和 PKCE 绑定到 token 交换。
 func ApplyConsumerOAuthExchange(c *gin.Context, values url.Values) {
+	if value, exists := c.Get(legacyOAuthRedirectContextKey); exists {
+		if redirectURI, ok := value.(string); ok {
+			values.Set("redirect_uri", redirectURI)
+		}
+	}
 	if value, exists := c.Get(consumerOAuthContextKey); exists {
 		if flow, ok := value.(*ConsumerOAuthFlow); ok {
 			values.Set("redirect_uri", flow.RedirectURI)

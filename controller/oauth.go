@@ -36,6 +36,7 @@ type oauthStateRequest struct {
 }
 
 type oauthFlowPayload struct {
+	RedirectURI     string                         `json:"redirect_uri,omitempty"`
 	Consumer        *oauth.ConsumerOAuthFlow       `json:"consumer,omitempty"`
 	AffiliateCode   string                         `json:"affiliate_code,omitempty"`
 	Verification    *service.OAuthVerificationFlow `json:"verification,omitempty"`
@@ -73,11 +74,12 @@ func GenerateOAuthCode(c *gin.Context) {
 	flowPayload := oauthFlowPayload{AffiliateCode: request.Aff}
 	consumerBrowserToken := ""
 	if request.CallbackTarget == "consumer" {
-		if !oauth.ConsumerOAuthOriginAllowed(c.Request) {
+		origin, err := oauth.ConsumerOAuthRequestOrigin(c.Request)
+		if err != nil {
 			writeAccountStatusError(c, http.StatusForbidden, "State parameter is empty or mismatched")
 			return
 		}
-		callbackURI, err := oauth.ConsumerCallbackURI(request.Provider)
+		callbackURI, err := oauth.ConsumerCallbackURI(request.Provider, origin)
 		if err != nil {
 			common.ApiErrorT(c, "Invalid parameters")
 			return
@@ -89,10 +91,20 @@ func GenerateOAuthCode(c *gin.Context) {
 		}
 		consumerBrowserToken = base64.RawURLEncoding.EncodeToString(secret)
 		hash := sha256.Sum256([]byte(consumerBrowserToken))
-		flowPayload.Consumer = &oauth.ConsumerOAuthFlow{RedirectURI: callbackURI, CodeVerifier: oauth2.GenerateVerifier(), BrowserHash: base64.RawURLEncoding.EncodeToString(hash[:])}
+		flowPayload.Consumer = &oauth.ConsumerOAuthFlow{Origin: origin, RedirectURI: callbackURI, CodeVerifier: oauth2.GenerateVerifier(), BrowserHash: base64.RawURLEncoding.EncodeToString(hash[:])}
 		if _, err := oauth.ConsumerAuthorizationURL(request.Provider, "", flowPayload.Consumer); err != nil {
 			common.ApiErrorT(c, "Invalid parameters")
 			return
+		}
+	}
+	if flowPayload.Consumer == nil && oauth.LegacyOAuthUsesBrowserRedirect(request.Provider) {
+		if origin, err := oauth.ConsumerOAuthRequestOrigin(c.Request); err == nil {
+			redirectURI, err := oauth.ConsumerCallbackURI(request.Provider, origin)
+			if err != nil {
+				common.ApiErrorT(c, "Invalid parameters")
+				return
+			}
+			flowPayload.RedirectURI = redirectURI
 		}
 	}
 	bindingStarted := false
@@ -214,7 +226,7 @@ func HandleOAuth(c *gin.Context) {
 	// consumption behavior. Consumer payloads are written only by this handler.
 	_ = common.UnmarshalJsonStr(pendingFlow.Payload, &storedPayload)
 	if storedPayload.Consumer != nil {
-		if !oauth.ConsumerOAuthOriginAllowed(c.Request) {
+		if !storedPayload.Consumer.MatchesRequestOrigin(c.Request) {
 			writeAccountStatusError(c, http.StatusForbidden, "State parameter is empty or mismatched")
 			return
 		}
@@ -233,6 +245,13 @@ func HandleOAuth(c *gin.Context) {
 		// A consumer callback is attempted once. A provider/network failure asks
 		// the browser to start a new authorization instead of replaying this one.
 		http.SetCookie(c.Writer, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
+	}
+
+	if storedPayload.Consumer == nil && storedPayload.RedirectURI != "" {
+		if err := oauth.SetLegacyOAuthRedirect(c, providerName, storedPayload.RedirectURI); err != nil {
+			writeAccountStatusError(c, http.StatusForbidden, "State parameter is empty or mismatched")
+			return
+		}
 	}
 
 	consumeMatch := model.AuthFlowMatch{

@@ -244,6 +244,10 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == "oauth.trusted_origins" {
+		_, err := system_setting.NormalizeOAuthTrustedOrigins(value)
+		return err
+	}
 	if key == legacyAccessTokenRetireAtKey {
 		return errLegacyRetireAtReadOnly
 	}

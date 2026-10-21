@@ -230,6 +230,13 @@ func UpdateOption(c *gin.Context) {
 		option.Value = fmt.Sprintf("%v", option.Value)
 	}
 	switch option.Key {
+	case "oauth.trusted_origins":
+		normalized, err := system_setting.NormalizeOAuthTrustedOrigins(option.Value.(string))
+		if err != nil {
+			common.ApiErrorStatus(c, http.StatusBadRequest, common.NewMessage("Invalid parameters"))
+			return
+		}
+		option.Value = normalized
 	case "frontend_setting.enabled":
 		if option.Value != "true" && option.Value != "false" {
 			common.ApiErrorStatus(c, http.StatusBadRequest, common.NewMessage("Invalid parameters"))

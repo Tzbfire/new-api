@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -39,22 +40,29 @@ func requestBrowserOrigin(request *http.Request) (string, bool) {
 	if len(originValues) > 1 {
 		return "", false
 	}
+	rawOrigin := ""
 	if len(originValues) == 1 {
 		if strings.Contains(originValues[0], ",") {
 			return "", false
 		}
-		origin, err := common.NormalizeOrigin(originValues[0])
+		rawOrigin = originValues[0]
+	} else {
+		refererValues := request.Header.Values("Referer")
+		if len(refererValues) != 1 {
+			return "", false
+		}
+		rawReferer := strings.TrimSpace(refererValues[0])
+		referer, err := url.Parse(rawReferer)
+		if err != nil || referer.Scheme == "" || referer.Host == "" || referer.User != nil || strings.ContainsAny(rawReferer, "\\#\r\n") {
+			return "", false
+		}
+		rawOrigin = referer.Scheme + "://" + referer.Host
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawOrigin)), "https:") {
+		origin, err := system_setting.NormalizeOAuthOrigin(rawOrigin)
 		return origin, err == nil
 	}
-	refererValues := request.Header.Values("Referer")
-	if len(refererValues) != 1 {
-		return "", false
-	}
-	referer, err := url.Parse(strings.TrimSpace(refererValues[0]))
-	if err != nil || referer.Scheme == "" || referer.Host == "" || referer.User != nil {
-		return "", false
-	}
-	origin, err := common.NormalizeOrigin(referer.Scheme + "://" + referer.Host)
+	origin, err := common.NormalizeOrigin(rawOrigin)
 	return origin, err == nil
 }
 
@@ -69,6 +77,28 @@ func isAllowedSessionOrigin(request *http.Request, origin string) bool {
 	}
 	for _, trustedOrigin := range common.SessionCookieTrustedURLs {
 		if subtle.ConstantTimeCompare([]byte(origin), []byte(trustedOrigin)) == 1 {
+			return true
+		}
+	}
+	// A configured login origin may refresh its own host-only cookie behind TLS
+	// termination. It gains no permission to operate on another host's cookies.
+	httpsRequestOrigin, err := system_setting.NormalizeOAuthOrigin("https://" + request.Host)
+	if err != nil || origin != httpsRequestOrigin {
+		return false
+	}
+	common.OptionMapRWMutex.RLock()
+	serverAddress := system_setting.ServerAddress
+	common.OptionMapRWMutex.RUnlock()
+	if configured, err := system_setting.NormalizeOAuthOrigin(serverAddress); err == nil && origin == configured {
+		return true
+	}
+	settings := system_setting.OAuthSettingsSnapshot()
+	configuredOrigins, err := system_setting.NormalizeOAuthTrustedOrigins(settings.TrustedOrigins)
+	if err != nil {
+		return false
+	}
+	for configured := range strings.SplitSeq(configuredOrigins, ",") {
+		if origin == configured {
 			return true
 		}
 	}

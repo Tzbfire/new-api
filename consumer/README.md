@@ -63,6 +63,18 @@ bun run build
 
 聊天 `/pg/chat/completions`、画室 `/pg/image-studio/*` 与 `/api/image-studio/*`、JWT/刷新会话、分组模型、API Key、计费、支付和套餐主要复用该基线已有接口。画室和新版会话本来就属于该基线，不能将它们误算为此次新增，也不能据此假设更早的后端已有这些能力。管理员配置的 API 地址复用 `/api/status` 中的 `api_info`，CC Switch 导入链接由前端生成，没有新增专用后端接口。
 
+### 多域名登录与 API 接入地址
+
+后台「身份验证 → OAuth 集成」中的「OAuth 可信来源」对应 `oauth.trusted_origins`，可按行或用逗号填写多个 HTTPS 源，例如 `https://app.example.com`、`https://app.example.net`。只允许精确的协议、域名和端口，不支持通配符、路径、凭证或查询参数。主站 `ServerAddress` 及安全 Cookie 环境配置中已有的可信源仍然有效；清空新增设置不会撤销这些原有配置。
+
+每个登录域名都须在对应 OAuth 提供方注册 `https://域名/oauth/提供方标识`。自定义提供方沿用通用 OAuth 配置。新版根据经过校验的浏览器 Origin/Referer 固定授权回调，并将其连同 PKCE 和浏览器绑定保存在服务端 flow 中；换 token 使用相同回调地址。旧版自行按当前域名构造回调的自定义 OAuth、Discord、OIDC 流程也会保存该可信地址。修改可信源不会重定向已经开始的流程，移除后尚未完成的相应流程会被拒绝。升级前的固定回调和 `/app/oauth/` 流程继续兼容。
+
+HTTPS 部署仍应配置 `SESSION_COOKIE_SECURE=true` 和既有必填的 `SESSION_COOKIE_TRUSTED_URL`。后台增加的可信登录域名可在保留公开 `Host` 的 TLS 反代后刷新和退出自己域名的会话；它不会获得其他 Host 的 Cookie 操作权限。不要让反代把公开 Host 改为内部上游名称，也不要用放宽 CORS 或信任任意 forwarded header 的方式替代登录源校验。
+
+后台「控制台内容 → API 地址」复用 `console_setting.api_info`，为每个地址填写名称、URL 和简短说明，开启后公开到 `/api/status`。密钥页用紧凑的地址栏显示这些信息，支持搜索、选择与复制；接入指南及 CC Switch 共享按账户保存的地址选择。建议说明适用网络或使用条件，不承诺未经验证的速度与可用率。展示地址不自动进入 OAuth 可信名单，也不改变分组权限、模型价格或密钥权限。仅添加实际由管理员维护的接入地址，不在源码预置部署域名。
+
+本次认证变更按 OWASP Authentication、Session Management、OAuth 2.0 Cheat Sheets 及 ASVS 5.0.0 的 10.1.2、10.2.1、10.2.2 控制核对：保留 flow 单次消费、有效期、提供方绑定、PKCE、浏览器 Cookie 绑定及弹窗消息来源验证。`controller/auth_flow_test.go` 覆盖双源的新旧登录、错误来源不消费 flow、移除信任、重放、刷新和退出；前端 OAuth 测试覆盖弹窗来源/窗口/state/provider 验证。本地合成提供方与三种数据库验证不能替代部署后的真实第三方授权验收。
+
 ### 切回旧界面
 
 新版以次要文字入口“切换旧版”保留回退，旧界面的主按钮“体验新版”恢复推荐体验；偏好仅决定页面界面，不参与权限或计费。后台“启用新版用户界面”对应 `frontend_setting.enabled`，关闭时全站普通页面回到旧版，优先于用户偏好。未部署或无法读取新 index 时也降级到旧页面。正在完成的 consumer OAuth/重置密码回调继续尝试加载新界面，不因切换丢失流程。
