@@ -7,12 +7,23 @@ COPY ./web ./
 COPY ./VERSION /build/VERSION
 RUN DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cat /build/VERSION) bun run build
 
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6 AS consumer-builder
+
+WORKDIR /build/consumer
+COPY consumer/package.json consumer/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY ./consumer ./
+ARG PUBLIC_SITE_NAME
+ARG PUBLIC_SITE_DOMAIN
+ARG PUBLIC_SITE_TITLE
+ARG PUBLIC_SITE_DESCRIPTION
+ARG PUBLIC_SITE_LOGO_URL
+ARG PUBLIC_DEFAULT_LANGUAGE
+RUN bun run build
+
 FROM --platform=$BUILDPLATFORM golang:1.26.1-alpine@sha256:2389ebfa5b7f43eeafbd6be0c3700cc46690ef842ad962f6c5bd6be49ed82039 AS builder2
 ENV GO111MODULE=on CGO_ENABLED=0 GOWORK=off
 
-ARG TARGETOS
-ARG TARGETARCH
-ENV GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64}
 ARG TARGETOS
 ARG TARGETARCH
 ENV GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64}
@@ -39,6 +50,8 @@ RUN apt-get update \
     && update-ca-certificates
 
 COPY --from=builder2 /build/new-api /
+COPY --from=consumer-builder /build/consumer/dist /opt/new-api/consumer
+ENV CONSUMER_FRONTEND_DIR=/opt/new-api/consumer
 COPY LICENSE NOTICE THIRD-PARTY-LICENSES.md /licenses/
 EXPOSE 3000
 WORKDIR /data

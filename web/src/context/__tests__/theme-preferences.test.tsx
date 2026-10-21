@@ -250,6 +250,33 @@ describe('theme preference persistence', () => {
     }
     expect(localStorage.getItem('stale-ui-cache')).toBeNull()
   })
+
+  it('preserves consumer choices, drafts, and chat history when the legacy frontend initializes', () => {
+    const consumerPreferences = {
+      'factory:frontend': 'legacy',
+      'factory:language': 'zh-TW',
+      'new-api-consumer:theme': 'dark',
+      'factory:choice:71:group': 'premium',
+      'factory:studio:71:draft': '{"prompt":"Saved draft"}',
+      'factory:chat-workspace:v1:71': '{"activeId":"chat-1"}',
+      'new-api-consumer:chat:v1:71': '[{"id":"chat-1","title":"Saved chat"}]',
+    }
+    for (const [key, value] of Object.entries(consumerPreferences)) {
+      localStorage.setItem(key, value)
+    }
+    localStorage.setItem('newapi:default:cache-version', 'outdated')
+    localStorage.setItem('factory:stale-cache', 'old')
+    localStorage.setItem('new-api-consumer:stale-cache', 'old')
+
+    initializeFrontendCache()
+    initializeFrontendCache()
+
+    for (const [key, value] of Object.entries(consumerPreferences)) {
+      expect(localStorage.getItem(key)).toBe(value)
+    }
+    expect(localStorage.getItem('factory:stale-cache')).toBeNull()
+    expect(localStorage.getItem('new-api-consumer:stale-cache')).toBeNull()
+  })
 })
 
 describe('theme font selection', () => {

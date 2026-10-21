@@ -25,6 +25,7 @@ import {
 } from './section-registry.tsx'
 
 const defaultSiteSettings: SiteSettings = {
+  'frontend_setting.enabled': true,
   Notice: '',
   SystemName: 'New API',
   Logo: '',

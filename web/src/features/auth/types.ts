@@ -88,6 +88,8 @@ export interface ApiResponse<T = unknown> {
 // ============================================================================
 
 export interface SystemStatus {
+  frontend_enabled?: boolean
+  frontend_available?: boolean
   success?: boolean
   message?: string
   data?: {

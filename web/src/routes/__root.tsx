@@ -115,6 +115,16 @@ export const Route = createRootRouteWithContext<{
 }>()({
   // 应用初始化与路由解析前统一校验会话
   beforeLoad: async ({ location }) => {
+    const frontendWindow = window as Window & {
+      factoryShouldUseConsumer?: (href: string) => boolean
+    }
+    if (frontendWindow.factoryShouldUseConsumer?.(location.href)) {
+      throw redirect({
+        href: location.href,
+        reloadDocument: true,
+        replace: true,
+      })
+    }
     const legacyTarget = resolveLegacyRoute(location.href)
     if (legacyTarget) {
       throw redirect({ href: legacyTarget, replace: true })

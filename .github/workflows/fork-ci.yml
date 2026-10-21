@@ -14,6 +14,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  consumer:
+    if: github.repository == 'manyou116/new-api'
+    uses: ./.github/workflows/consumer-ci.yml
+
   backend:
     if: github.repository == 'manyou116/new-api'
     runs-on: ubuntu-latest

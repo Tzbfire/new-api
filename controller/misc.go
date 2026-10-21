@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -16,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
+	"github.com/QuantumNous/new-api/setting/frontend_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
@@ -46,8 +48,11 @@ func GetStatus(c *gin.Context) {
 	defer common.OptionMapRWMutex.RUnlock()
 
 	legalSetting := system_setting.GetLegalSettings()
+	frontendAvailable := frontend_setting.Available()
 
 	data := gin.H{
+		"frontend_available":          frontendAvailable,
+		"frontend_enabled":            frontend_setting.GetFrontendSetting().Enabled && frontendAvailable,
 		"version":                     common.Version,
 		"start_time":                  common.StartTime,
 		"email_verification":          common.EmailVerificationEnabled,
@@ -252,6 +257,15 @@ func SendEmailVerification(c *gin.Context) {
 }
 
 func SendPasswordResetEmail(c *gin.Context) {
+	resetPath := "/user/reset"
+	switch c.Query("callback_target") {
+	case "":
+	case "consumer":
+		resetPath = "/app/reset"
+	default:
+		common.ApiErrorT(c, "Invalid parameters")
+		return
+	}
 	email := model.NormalizeEmail(c.Query("email"))
 	if err := common.Validate.Var(email, "required,email"); err != nil {
 		common.ApiErrorT(c, "Invalid parameters")
@@ -260,7 +274,7 @@ func SendPasswordResetEmail(c *gin.Context) {
 	if user, err := model.GetUniqueUserByEmail(email); err == nil {
 		code := common.GenerateVerificationCode(0)
 		common.RegisterVerificationCodeWithKey(email, code, common.PasswordResetPurpose)
-		link := fmt.Sprintf("%s/user/reset?email=%s&token=%s", system_setting.ServerAddress, email, code)
+		link := fmt.Sprintf("%s%s?email=%s&token=%s", system_setting.ServerAddress, resetPath, url.QueryEscape(email), url.QueryEscape(code))
 		lang := user.GetSetting().Language
 		if lang == "" {
 			lang = i18n.StatedLang(c)

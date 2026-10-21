@@ -1,0 +1,126 @@
+.auth-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: min(780px, 85dvh);
+  gap: 24px;
+  padding-block: 24px;
+  width: 100%;
+}
+.auth-page .auth-card {
+  width: min(100%, 460px);
+  padding: 38px;
+  gap: 24px;
+}
+.auth-card h1 {
+  font-family: 'Lora Variable', Georgia, serif;
+  font-size: 34px;
+  margin-bottom: 12px;
+  letter-spacing: -0.035em;
+}
+.auth-card .eyebrow {
+  margin-bottom: 10px;
+}
+.auth-card .field-label {
+  font-size: 13px;
+}
+.auth-card .button {
+  min-height: 46px;
+}
+.auth-mark {
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.auth-footer {
+  font-size: 11px;
+}
+.auth-alternative {
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+.auth-alternative summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.auth-alternative p {
+  margin: 12px 0;
+}
+.auth-qr {
+  margin-inline: auto;
+  border-radius: 12px;
+  background: #fff;
+}
+.secret-value {
+  display: block;
+  max-width: 100%;
+  padding: 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  font-size: 13px;
+  user-select: all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.account-page .card-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+.account-page .card h2 {
+  font-size: 21px;
+  letter-spacing: -0.025em;
+}
+.account-page .card p {
+  font-size: 13px;
+}
+.account-page .card-grid > .card {
+  height: 100%;
+}
+.session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+}
+.session-row .stack {
+  gap: 7px;
+  min-width: 0;
+}
+.session-row strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  max-width: 700px;
+}
+.session-row .badge {
+  align-self: flex-start;
+}
+.session-row .button {
+  flex-shrink: 0;
+}
+@media (max-width: 700px) {
+  .account-page .card-grid {
+    grid-template-columns: 1fr;
+  }
+  .auth-page {
+    min-height: 75dvh;
+  }
+  .auth-page .auth-card {
+    padding: 26px;
+  }
+  .auth-card h1 {
+    font-size: 29px;
+  }
+  .session-row {
+    align-items: flex-start;
+  }
+}

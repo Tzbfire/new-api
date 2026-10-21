@@ -27,6 +27,7 @@ import { useTopNavLinks } from '@/hooks/use-top-nav-links'
 
 import { defaultTopNavLinks } from '../config/top-nav.config'
 import type { TopNavLink } from '../types'
+import { FrontendEntry } from './frontend-entry'
 import { Header } from './header'
 import { SystemBrand } from './system-brand'
 import { TopNav } from './top-nav'
@@ -144,6 +145,7 @@ export function AppHeader({
               loading={notifications.loading}
             />
           )}
+          <FrontendEntry />
           <LanguageSwitcher />
           {showConfigDrawer && <ConfigDrawer />}
           {showProfileDropdown && <ProfileDropdown />}

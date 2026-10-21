@@ -1,0 +1,195 @@
+.studio-results .library-page,
+.library-page {
+  min-width: 0;
+  gap: 10px;
+}
+.library-page .studio-results-heading {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  gap: 8px;
+}
+.library-page .studio-results-heading h2 {
+  margin: 0;
+  font-size: 21px;
+}
+.library-page .library-options-button {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 6px;
+  flex-shrink: 0;
+}
+.studio-results .library-page .library-toolbar,
+.library-page .library-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.studio-results .library-page .library-toolbar > .field,
+.library-page .library-toolbar > .field {
+  min-width: 0;
+  flex: 1 1 170px;
+  max-width: 280px;
+}
+.library-page .library-filter-tabs {
+  min-width: 0;
+}
+.library-page .library-toolbar > .button {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  position: relative;
+}
+.library-page .library-toolbar > .button[aria-busy='true'] > .spin {
+  position: absolute;
+}
+.library-page .library-toolbar > .button[aria-busy='true'] > svg:not(.spin) {
+  visibility: hidden;
+}
+.library-page .library-summary-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  min-height: 24px;
+}
+.library-page .library-summary {
+  gap: 6px 12px;
+  font-size: 12px;
+}
+.library-page .studio-page-status {
+  position: absolute;
+  inset-inline-end: 0;
+  top: 0;
+  margin: 0;
+  min-width: 0;
+  font-size: 12px;
+}
+.library-page[aria-busy='true'] .library-summary {
+  visibility: hidden;
+}
+.library-page .studio-page-status:empty {
+  display: none;
+}
+.library-page .library-batch-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 14px;
+}
+.library-page .library-batch-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.library-page .library-batch-progress progress {
+  flex: 1 1 100%;
+  height: 5px;
+  order: 1;
+}
+.library-page .library-batch-progress > p {
+  margin: 0;
+  font-size: 12px;
+}
+.library-page .library-batch-progress.is-finished {
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.library-page .library-selection {
+  min-height: 24px;
+  gap: 6px 12px;
+  justify-content: flex-start;
+}
+.library-page .library-selection .button[aria-busy='true'] {
+  position: relative;
+}
+.library-page .library-selection .button[aria-busy='true'] > .spin {
+  position: absolute;
+  inset-inline-start: 12px;
+}
+.library-page .library-selection .button[aria-busy='true'] > svg:not(.spin) {
+  visibility: hidden;
+}
+.library-page .library-selection-notice {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+}
+.library-page .library-maintenance {
+  min-width: 0;
+}
+.library-page .library-maintenance > .row {
+  flex-wrap: wrap;
+}
+@media (max-width: 600px) {
+  .studio-results .library-page .library-toolbar > .field,
+  .library-page .library-toolbar > .field {
+    max-width: none;
+    flex-basis: calc(100% - 48px);
+    order: 0;
+  }
+  .library-page .library-toolbar > .button {
+    order: 1;
+  }
+  .library-page .library-filter-tabs {
+    order: 2;
+    width: 100%;
+    overflow-x: auto;
+  }
+  .library-page .library-selection > .row {
+    width: auto;
+  }
+}
+
+.collection-picker-popup {
+  display: flex;
+  flex-direction: column;
+  width: max(320px, var(--anchor-width));
+  max-width: min(400px, calc(100vw - 24px));
+}
+.collection-picker-popup .search-select-search,
+.collection-picker-popup .search-select-footer {
+  flex-shrink: 0;
+}
+.collection-picker-popup .search-select-list {
+  min-height: 0;
+  max-height: 300px;
+}
+.collection-picker-popup .search-select-option {
+  padding: 9px 10px;
+  min-height: 44px;
+}
+.collection-picker-popup .search-select-option-copy strong,
+.collection-picker-popup .search-select-option-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.collection-picker-popup .pagination-compact {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+}
+.collection-picker-popup .pagination-pages {
+  gap: 2px;
+}
+.collection-picker-popup .pagination-pages .button {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 4px;
+}

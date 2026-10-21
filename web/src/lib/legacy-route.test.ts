@@ -47,6 +47,12 @@ describe('legacy frontend route migration', () => {
   })
 
   test('preserves search and hash while applying route-specific behavior', () => {
+    expect(resolveLegacyRoute('/login?next=%2Fkeys%3Fgroup%3Dvip')).toBe(
+      '/sign-in?redirect=%2Fkeys%3Fgroup%3Dvip'
+    )
+    expect(
+      resolveLegacyRoute('/login?next=%2Fkeys&redirect=%2Fsystem-settings')
+    ).toBe('/sign-in?redirect=%2Fsystem-settings')
     expect(resolveLegacyRoute('/login?redirect=%2Fkeys#continue')).toBe(
       '/sign-in?redirect=%2Fkeys#continue'
     )

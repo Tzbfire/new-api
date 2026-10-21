@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,10 @@ func sanitizeImageStudioTaskDtoWithAssets(task *model.Task, taskDto *dto.TaskDto
 	// 插件检查点仅供后台恢复，可能包含上游私有任务 ID 和原始回包。
 	changed := false
 	if root, ok := payload.(map[string]any); ok {
+		if request, exists := root["request"].(map[string]any); exists && task.PrivateData.RequestId != "" {
+			request["request_id"] = task.PrivateData.RequestId
+			changed = true
+		}
 		if _, exists := root["plugin"]; exists {
 			delete(root, "plugin")
 			changed = true
@@ -238,9 +243,8 @@ func GetImageStudioTaskImage(c *gin.Context) {
 	c.Data(http.StatusOK, mimeType, data)
 }
 
-// DownloadImageStudioTaskImages streams a ZIP directly from local image files.
-// It intentionally pre-opens and validates every asset before sending headers,
-// so an unavailable image never produces a truncated archive response.
+// DownloadImageStudioTaskImages prepares a complete private ZIP before sending
+// headers, so cleanup of source images cannot interrupt an accepted download.
 func DownloadImageStudioTaskImages(c *gin.Context) {
 	rawTaskIDs := strings.Split(c.Query("task_ids"), ",")
 	taskIDs := make([]string, 0, len(rawTaskIDs))
@@ -284,47 +288,114 @@ func DownloadImageStudioTaskImages(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	assetsByTask := make(map[string]*model.ImageStudioAsset, len(assets))
+	assetsByTask := make(map[string][]*model.ImageStudioAsset, len(assets))
 	for _, asset := range assets {
-		if asset != nil && asset.ImageIndex == 1 {
-			assetsByTask[asset.TaskID] = asset
+		if asset != nil && asset.ImageIndex > 0 {
+			assetsByTask[asset.TaskID] = append(assetsByTask[asset.TaskID], asset)
 		}
 	}
-	type zipSource struct {
-		file     io.ReadSeekCloser
-		fileInfo interface {
-			ModTime() time.Time
-		}
-		name string
+	ctx := c.Request.Context()
+	if ctx.Err() != nil {
+		imageStudioContentError(c, http.StatusRequestTimeout, "image archive request canceled")
+		return
 	}
-	sources := make([]zipSource, 0, len(taskIDs))
+	archiveFile, err := os.CreateTemp("", "image-studio-download-*.zip")
+	if err != nil {
+		logger.LogError(ctx, "create image studio ZIP: "+err.Error())
+		imageStudioContentError(c, http.StatusInternalServerError, "could not prepare image archive")
+		return
+	}
 	defer func() {
-		for _, source := range sources {
-			_ = source.file.Close()
+		_ = archiveFile.Close()
+		if err := os.Remove(archiveFile.Name()); err != nil {
+			logger.LogWarn(ctx, "remove image studio ZIP: "+err.Error())
 		}
 	}()
+	archive := zip.NewWriter(archiveFile)
+	archiveClosed := false
+	defer func() {
+		if !archiveClosed {
+			_ = archive.Close()
+		}
+	}()
+	buffer := make([]byte, 32*1024)
 	for index, taskID := range taskIDs {
 		task := tasksByID[taskID]
-		asset := assetsByTask[taskID]
-		if task == nil || asset == nil || asset.Status != model.ImageStudioAssetStatusReady {
+		taskAssets := assetsByTask[taskID]
+		if task == nil || len(taskAssets) == 0 {
 			imageStudioContentError(c, http.StatusGone, "one or more images are no longer available")
 			return
 		}
-		if err := service.ValidateImageStudioAssetOwnership(asset.StorageKey, task.UserId, task.TaskID); err != nil {
-			imageStudioContentError(c, http.StatusNotFound, "image content not found")
-			return
+		for _, asset := range taskAssets {
+			if ctx.Err() != nil {
+				imageStudioContentError(c, http.StatusRequestTimeout, "image archive request canceled")
+				return
+			}
+			if asset.UserID != task.UserId || asset.Status != model.ImageStudioAssetStatusReady {
+				imageStudioContentError(c, http.StatusGone, "one or more images are no longer available")
+				return
+			}
+			if err := service.ValidateImageStudioAssetOwnership(asset.StorageKey, task.UserId, task.TaskID); err != nil {
+				imageStudioContentError(c, http.StatusNotFound, "image content not found")
+				return
+			}
+			file, info, err := service.OpenImageStudioAsset(asset.StorageKey, asset.SizeBytes)
+			if err != nil {
+				logger.LogWarn(c.Request.Context(), fmt.Sprintf("batch download image studio asset task=%s: %s", task.TaskID, err.Error()))
+				imageStudioContentError(c, http.StatusNotFound, "image content not found")
+				return
+			}
+			name := fmt.Sprintf("image-%02d%s", index+1, imageStudioMimeExtension(asset.MimeType))
+			if len(taskAssets) > 1 {
+				name = fmt.Sprintf("image-%02d-%02d%s", index+1, asset.ImageIndex, imageStudioMimeExtension(asset.MimeType))
+			}
+			header := &zip.FileHeader{Name: name, Method: zip.Store}
+			header.SetModTime(info.ModTime())
+			entry, writeErr := archive.CreateHeader(header)
+			// Check cancellation between bounded copies and require the complete
+			// validated file size, including when a source is truncated mid-read.
+			for remaining := info.Size(); writeErr == nil && remaining > 0; {
+				if writeErr = ctx.Err(); writeErr != nil {
+					break
+				}
+				count, readErr := io.ReadFull(file, buffer[:min(remaining, int64(len(buffer)))])
+				if readErr != nil {
+					writeErr = readErr
+					break
+				}
+				written, err := entry.Write(buffer[:count])
+				writeErr = err
+				if written != count && writeErr == nil {
+					writeErr = io.ErrShortWrite
+				}
+				remaining -= int64(count)
+			}
+			closeErr := file.Close()
+			if writeErr != nil || closeErr != nil {
+				logger.LogError(ctx, fmt.Sprintf("prepare image studio ZIP entry: copy=%v close=%v", writeErr, closeErr))
+				if ctx.Err() != nil {
+					imageStudioContentError(c, http.StatusRequestTimeout, "image archive request canceled")
+				} else {
+					imageStudioContentError(c, http.StatusInternalServerError, "could not prepare image archive")
+				}
+				return
+			}
 		}
-		file, info, err := service.OpenImageStudioAsset(asset.StorageKey, asset.SizeBytes)
-		if err != nil {
-			logger.LogWarn(c.Request.Context(), fmt.Sprintf("batch download image studio asset task=%s: %s", task.TaskID, err.Error()))
-			imageStudioContentError(c, http.StatusNotFound, "image content not found")
-			return
-		}
-		sources = append(sources, zipSource{
-			file:     file,
-			fileInfo: info,
-			name:     fmt.Sprintf("image-%02d%s", index+1, imageStudioMimeExtension(asset.MimeType)),
-		})
+	}
+	if err := archive.Close(); err != nil {
+		logger.LogError(ctx, "finalize image studio ZIP: "+err.Error())
+		imageStudioContentError(c, http.StatusInternalServerError, "could not prepare image archive")
+		return
+	}
+	archiveClosed = true
+	if _, err := archiveFile.Seek(0, io.SeekStart); err != nil {
+		logger.LogError(ctx, "rewind image studio ZIP: "+err.Error())
+		imageStudioContentError(c, http.StatusInternalServerError, "could not prepare image archive")
+		return
+	}
+	if ctx.Err() != nil {
+		imageStudioContentError(c, http.StatusRequestTimeout, "image archive request canceled")
+		return
 	}
 
 	c.Header("Content-Type", "application/zip")
@@ -333,26 +404,7 @@ func DownloadImageStudioTaskImages(c *gin.Context) {
 	c.Header("X-Accel-Buffering", "no")
 	c.Header("Content-Security-Policy", "default-src 'none'")
 	c.Header("X-Content-Type-Options", "nosniff")
-	c.Status(http.StatusOK)
-	archive := zip.NewWriter(c.Writer)
-	for _, source := range sources {
-		header := &zip.FileHeader{Name: source.name, Method: zip.Store}
-		header.SetModTime(source.fileInfo.ModTime())
-		entry, err := archive.CreateHeader(header)
-		if err != nil {
-			logger.LogError(c.Request.Context(), "create image studio ZIP entry: "+err.Error())
-			_ = archive.Close()
-			return
-		}
-		if _, err := io.Copy(entry, source.file); err != nil {
-			logger.LogError(c.Request.Context(), "stream image studio ZIP entry: "+err.Error())
-			_ = archive.Close()
-			return
-		}
-	}
-	if err := archive.Close(); err != nil {
-		logger.LogError(c.Request.Context(), "finalize image studio ZIP: "+err.Error())
-	}
+	http.ServeContent(c.Writer, c.Request, "ai-studio-images.zip", time.Time{}, archiveFile)
 }
 
 func findImageStudioImage(data json.RawMessage, index int) (map[string]any, bool) {

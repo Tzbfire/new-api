@@ -479,12 +479,16 @@ func buildQueryResult(modelName string, merged map[bucketKey]counters) QueryResu
 		all.generationMs += total.generationMs
 
 		results = append(results, GroupResult{
-			Group:        group,
-			AvgTtftMs:    avg(total.ttftSumMs, total.ttftCount),
-			AvgLatencyMs: avg(total.totalLatencyMs, total.requestCount),
-			SuccessRate:  successRate(total),
-			AvgTps:       avgTps(total),
-			Series:       series,
+			Group:           group,
+			AvgTtftMs:       avg(total.ttftSumMs, total.ttftCount),
+			AvgLatencyMs:    avg(total.totalLatencyMs, total.requestCount),
+			SuccessRate:     successRate(total),
+			AvgTps:          avgTps(total),
+			RequestCount:    total.requestCount,
+			SuccessCount:    total.successCount,
+			TtftSampleCount: total.ttftCount,
+			TpsObserved:     total.generationMs > 0,
+			Series:          series,
 		})
 	}
 
@@ -520,11 +524,15 @@ func summarize(total counters) *Summary {
 
 func bucketPoint(ts int64, value counters) BucketPoint {
 	return BucketPoint{
-		Ts:           ts,
-		AvgTtftMs:    avg(value.ttftSumMs, value.ttftCount),
-		AvgLatencyMs: avg(value.totalLatencyMs, value.requestCount),
-		SuccessRate:  successRate(value),
-		AvgTps:       avgTps(value),
+		Ts:              ts,
+		AvgTtftMs:       avg(value.ttftSumMs, value.ttftCount),
+		AvgLatencyMs:    avg(value.totalLatencyMs, value.requestCount),
+		SuccessRate:     successRate(value),
+		AvgTps:          avgTps(value),
+		RequestCount:    value.requestCount,
+		SuccessCount:    value.successCount,
+		TtftSampleCount: value.ttftCount,
+		TpsObserved:     value.generationMs > 0,
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -59,7 +60,12 @@ func (p *GitHubProvider) ExchangeToken(ctx context.Context, code string, c *gin.
 		"client_secret": common.GitHubClientSecret,
 		"code":          code,
 	}
-	jsonData, err := json.Marshal(values)
+	consumerValues := url.Values{}
+	ApplyConsumerOAuthExchange(c, consumerValues)
+	for name, value := range consumerValues {
+		values[name] = value[0]
+	}
+	jsonData, err := common.Marshal(values)
 	if err != nil {
 		return nil, err
 	}

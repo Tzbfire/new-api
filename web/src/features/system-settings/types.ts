@@ -141,6 +141,7 @@ export type SystemTaskFilters = {
 }
 
 export type SiteSettings = {
+  'frontend_setting.enabled'?: boolean
   Notice: string
   SystemName: string
   Logo: string

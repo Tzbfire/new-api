@@ -901,7 +901,8 @@ func TestWebFallbackDoesNotCacheMissingAPIOrAssets(t *testing.T) {
 	page := performPluginRequest(outer, http.MethodGet, "/security")
 	assert.Equal(t, http.StatusOK, page.Code)
 	assert.Equal(t, "dashboard", page.Body.String())
-	assert.Equal(t, "no-cache", page.Header().Get("Cache-Control"))
+	assert.Equal(t, "no-store", page.Header().Get("Cache-Control"))
+	assert.Equal(t, "Cookie", page.Header().Get("Vary"))
 }
 
 func TestSecurityRoutesDisableCachingBeforeAuthentication(t *testing.T) {

@@ -27,7 +27,16 @@ const PRESERVED_LOCAL_STORAGE_KEYS = new Set([
   'uid',
   'aff',
   'oauth:binding:result',
+  'factory:frontend',
+  'factory:language',
+  'new-api-consumer:theme',
 ])
+const PRESERVED_CONSUMER_STORAGE_PREFIXES = [
+  'factory:choice:',
+  'factory:studio:',
+  'factory:chat-workspace:v1:',
+  'new-api-consumer:chat:v1:',
+]
 
 export function initializeFrontendCache(): void {
   if (typeof window === 'undefined') return
@@ -52,7 +61,13 @@ function clearLocalUiCache(): void {
   const keysToRemove: string[] = []
   for (let index = 0; index < window.localStorage.length; index += 1) {
     const key = window.localStorage.key(index)
-    if (key && !PRESERVED_LOCAL_STORAGE_KEYS.has(key)) {
+    if (
+      key &&
+      !PRESERVED_LOCAL_STORAGE_KEYS.has(key) &&
+      !PRESERVED_CONSUMER_STORAGE_PREFIXES.some((prefix) =>
+        key.startsWith(prefix)
+      )
+    ) {
       keysToRemove.push(key)
     }
   }

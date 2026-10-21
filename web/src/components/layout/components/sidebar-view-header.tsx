@@ -58,6 +58,7 @@ export function SidebarViewHeader(props: SidebarViewHeaderProps) {
             render={
               <Link
                 to={props.view.parent.to}
+                reloadDocument={props.view.parent.reloadDocument}
                 preload={isMobile ? false : undefined}
                 onClick={() => setOpenMobile(false)}
               />

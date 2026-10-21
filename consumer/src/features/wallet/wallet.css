@@ -1,0 +1,334 @@
+.wallet-balance {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+.balance-number {
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+}
+.wallet-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+.preset-row {
+  flex-wrap: wrap;
+}
+.payment-method-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  gap: 0.7rem;
+}
+.payment-method-card {
+  justify-content: flex-start;
+  padding: 0.85rem;
+  min-height: 66px;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.payment-method-card[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.payment-method-card > span:nth-child(2) {
+  flex: 1;
+}
+.payment-brand {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+.payment-brand-alipay {
+  color: #1677ff;
+}
+.payment-brand-wxpay {
+  color: #07a14b;
+}
+.payment-brand-stripe {
+  color: #635bff;
+}
+.quote-request {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+.quote-total {
+  display: grid;
+  gap: 0.4rem;
+  padding: 1.2rem;
+  border-radius: 1rem;
+  background: var(--surface-2);
+}
+.quote-total strong {
+  font-size: 1.7rem;
+  min-height: 1.6em;
+  font-variant-numeric: tabular-nums;
+}
+.quote-total small {
+  color: var(--muted);
+}
+.quote-status {
+  min-height: 32px;
+}
+.quote-status .button {
+  padding: 2px 6px;
+  min-height: 28px;
+  font-size: inherit;
+}
+.product-option,
+.key-facts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.key-card {
+  display: grid;
+  gap: 1rem;
+}
+.key-facts {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.key-actions {
+  flex-wrap: wrap;
+}
+.key-mask,
+.secret-code {
+  overflow-wrap: anywhere;
+}
+.secret-code {
+  padding: 1rem;
+  border-radius: 0.75rem;
+  background: var(--surface-2);
+  user-select: all;
+}
+.plan-price {
+  font-size: 2.4rem;
+  letter-spacing: -0.04em;
+}
+.plan-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+.plan-card .plan-description {
+  min-height: 2.5rem;
+}
+.plan-details {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0;
+  list-style: none;
+}
+.plan-details li {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+.consumer-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+}
+.consumer-table {
+  width: 100%;
+  text-align: left;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.consumer-table th,
+.consumer-table td {
+  padding: 1rem 1.2rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.consumer-table th {
+  color: var(--muted);
+  font-weight: 500;
+}
+.consumer-table tr:last-child td {
+  border-bottom: 0;
+}
+.pagination {
+  justify-content: space-between;
+}
+.usage-chart {
+  display: flex;
+  align-items: end;
+  gap: 0.55rem;
+  height: 180px;
+  padding-top: 1rem;
+}
+.usage-chart-column {
+  display: flex;
+  height: 100%;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  justify-content: end;
+  align-items: center;
+  gap: 0.4rem;
+}
+.usage-chart-bar {
+  width: 100%;
+  max-width: 3rem;
+  min-height: 2px;
+  border-radius: 0.35rem 0.35rem 0 0;
+  background: var(--accent, #496952);
+}
+.usage-chart-label {
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+@media (max-width: 760px) {
+  .wallet-columns {
+    grid-template-columns: 1fr;
+  }
+  .consumer-table th,
+  .consumer-table td {
+    padding: 0.8rem;
+  }
+  .key-facts {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+}
+
+.wallet-overview {
+  display: grid;
+  gap: 22px;
+}
+.wallet-overview-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+}
+.wallet-overview .balance-number {
+  font-size: clamp(1.7rem, 3vw, 2.4rem);
+  overflow-wrap: anywhere;
+}
+.wallet-overview .wallet-balance .muted {
+  font-size: 12px;
+}
+.wallet-usage-summary {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.wallet-usage-summary strong {
+  color: var(--ink);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.wallet-plan-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px 20px;
+  flex-wrap: wrap;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+.wallet-plan-link .row {
+  gap: 8px;
+}
+.wallet-plan-link:hover {
+  color: var(--ink);
+}
+.wallet-plan-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 5px;
+  border-radius: 4px;
+}
+.plans-preference {
+  width: 290px;
+  max-width: 100%;
+}
+.plans-preference .field-hint {
+  font-size: 10px;
+  line-height: 1.5;
+}
+.plans-page > h2 {
+  font-size: 18px;
+}
+.plans-catalog {
+  gap: 14px;
+}
+.plans-catalog .plan-card {
+  padding: 18px;
+  gap: 12px;
+}
+.plans-catalog .plan-description {
+  min-height: 0;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.plans-catalog .plan-price {
+  font-size: 30px;
+}
+.plans-catalog .plan-details {
+  margin: 0;
+  font-size: 13px;
+  gap: 8px;
+}
+.plans-catalog .plan-details .button {
+  padding: 2px 6px;
+  min-height: 28px;
+}
+.plans-catalog .plan-card > .button:last-child {
+  margin-top: auto;
+}
+@media (max-width: 700px) {
+  .plans-page .page-header > .row {
+    width: 100%;
+  }
+  .plans-preference {
+    width: 100%;
+  }
+}
+@media (max-width: 540px) {
+  .wallet-overview-main {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .wallet-usage-summary {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+  }
+  .wallet-usage-summary > a {
+    margin-left: auto;
+  }
+  .wallet-overview {
+    gap: 18px;
+  }
+  .wallet-plan-link {
+    font-size: 11px;
+  }
+  .wallet-overview .balance-number {
+    font-size: clamp(1.5rem, 7vw, 2rem);
+  }
+}

@@ -12,6 +12,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -64,13 +66,27 @@ func TestAdaptorMasksDialedHostsInDialFailure(t *testing.T) {
 	defer upstream.Close()
 	upstreamURL, err := url.Parse(upstream.URL)
 	require.NoError(t, err)
+	proxyRequests := make(chan string, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyRequests <- r.Method
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// Gorilla includes a rejected CONNECT's reason phrase in its error.
+		// Include the actual proxy host so masking remains exercised without
+		// relying on DNS failure or a racy closed-port reservation.
+		_, _ = io.WriteString(conn, "HTTP/1.1 502 proxy 127.0.0.1 unavailable\r\nContent-Length: 0\r\n\r\n")
+	}))
+	defer proxy.Close()
 	for _, tc := range []struct {
 		name   string
 		proxy  string
 		hidden string
 	}{
 		{name: "absolute route host", hidden: "localhost"},
-		{name: "channel proxy host", proxy: "http://egress.private.invalid:8080", hidden: "egress.private.invalid"},
+		{name: "channel proxy host", proxy: proxy.URL, hidden: "127.0.0.1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
@@ -84,6 +100,14 @@ func TestAdaptorMasksDialedHostsInDialFailure(t *testing.T) {
 			common.SetContextKey(c, constant.ContextKeyChannelSetting, info.ChannelSetting)
 
 			_, err := (&Adaptor{}).DoRequest(c, info, nil)
+			if tc.proxy != "" {
+				select {
+				case method := <-proxyRequests:
+					assert.Equal(t, http.MethodConnect, method)
+				default:
+					t.Fatal("channel proxy did not receive CONNECT")
+				}
+			}
 
 			var apiErr *types.NewAPIError
 			require.ErrorAs(t, err, &apiErr)
@@ -726,8 +750,7 @@ func TestAdaptorResponsesToGeminiAddsThoughtSignatureForFunctionCallHistory(t *t
 }
 
 func TestAdaptorConvertsOpenAIChatRequestToResponsesUpstream(t *testing.T) {
-	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+	config := &dto.AdvancedCustomConfig{
 		Routes: []dto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/chat/completions",
@@ -735,21 +758,48 @@ func TestAdaptorConvertsOpenAIChatRequestToResponsesUpstream(t *testing.T) {
 				Converter:    relayconvert.ConverterOpenAIChatToOpenAIResponses,
 			},
 		},
-	})
-	c := advancedCustomGinContext("/v1/chat/completions")
-
-	converted, err := adaptor.ConvertOpenAIRequest(c, info, &dto.GeneralOpenAIRequest{
-		Model: "gpt-test",
-		Messages: []dto.Message{
-			{Role: "user", Content: "hello"},
-		},
-	})
-	require.NoError(t, err)
-
-	responsesReq, ok := converted.(*dto.OpenAIResponsesRequest)
-	require.True(t, ok)
-	assert.Equal(t, "gpt-test", responsesReq.Model)
-	assert.NotEmpty(t, responsesReq.Input)
+	}
+	for _, path := range []string{"/v1/chat/completions", "/pg/chat/completions"} {
+		t.Run(path, func(t *testing.T) {
+			adaptor := &Adaptor{}
+			info := advancedCustomRelayInfo(config)
+			info.RequestURLPath = path
+			c := advancedCustomGinContext(path)
+			candidate := &model.Channel{Type: constant.ChannelTypeAdvancedCustom}
+			candidate.SetOtherSettings(dto.ChannelOtherSettings{AdvancedCustom: config})
+			// Use the actual distributor path filter before exercising route
+			// conversion, so listable channels also remain eligible for chat.
+			eligible, _ := model.ChannelSatisfiesFilters(candidate, "gpt-test", []hostdto.ChannelFilter{{
+				Kind: hostdto.FilterRequestPath, RequestPath: relayconstant.NormalizeRequestPath(c.Request.URL.Path),
+			}})
+			assert.True(t, eligible)
+			converted, err := adaptor.ConvertOpenAIRequest(c, info, &dto.GeneralOpenAIRequest{
+				Model: "gpt-test", Messages: []dto.Message{{Role: "user", Content: "hello"}},
+			})
+			require.NoError(t, err)
+			responsesReq, ok := converted.(*dto.OpenAIResponsesRequest)
+			require.True(t, ok)
+			assert.Equal(t, "gpt-test", responsesReq.Model)
+			assert.NotEmpty(t, responsesReq.Input)
+			requestURL, err := adaptor.GetRequestURL(info)
+			require.NoError(t, err)
+			assert.Equal(t, "https://fallback.example/v1/responses", requestURL)
+			// URL lookup may resolve from RelayInfo without a Gin context.
+			requestURL, err = (&Adaptor{}).GetRequestURL(info)
+			require.NoError(t, err)
+			assert.Equal(t, "https://fallback.example/v1/responses", requestURL)
+		})
+	}
+	for _, path := range []struct{ browser, canonical string }{
+		{"/pg/image-studio/estimate", "/v1/images/generations"},
+		{"/pg/image-studio/generations", "/v1/images/generations"},
+		{"/pg/images/generations", "/v1/images/generations"},
+		{"/pg/image-studio/edits", "/v1/images/edits"},
+		{"/pg/images/edits", "/v1/images/edits"},
+		{"/v1/images/edits", "/v1/images/edits"},
+	} {
+		assert.Equal(t, path.canonical, relayconstant.NormalizeRequestPath(path.browser))
+	}
 }
 
 func TestAdaptorConvertsOpenAIChatRequestToClaudeUpstream(t *testing.T) {

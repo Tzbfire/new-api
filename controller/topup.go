@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -97,7 +98,22 @@ func GetTopUpInfo(c *gin.Context) {
 		}
 	}
 
+	// EPay's money field is denominated in CNY; Waffo sends the configured
+	// order currency. Stripe uses a remote price, so do not infer its currency.
+	paymentCurrencies := map[string]string{
+		"epay": "CNY", "alipay": "CNY", "wxpay": "CNY",
+		"waffo": strings.ToUpper(getWaffoCurrency()), "waffo_pancake": "USD",
+	}
+	for _, method := range payMethods {
+		currency := strings.ToUpper(strings.TrimSpace(method["currency"]))
+		if len(currency) == 3 && currency[0] >= 'A' && currency[0] <= 'Z' && currency[1] >= 'A' && currency[1] <= 'Z' && currency[2] >= 'A' && currency[2] <= 'Z' {
+			if _, known := paymentCurrencies[method["type"]]; !known {
+				paymentCurrencies[method["type"]] = currency
+			}
+		}
+	}
 	data := gin.H{
+		"payment_currencies":               paymentCurrencies,
 		"enable_online_topup":              isEpayTopUpEnabled(),
 		"enable_stripe_topup":              isStripeTopUpEnabled(),
 		"enable_creem_topup":               isCreemTopUpEnabled(),
@@ -118,9 +134,16 @@ func GetTopUpInfo(c *gin.Context) {
 		"stripe_min_topup":        setting.StripeMinTopUp,
 		"waffo_min_topup":         setting.WaffoMinTopUp,
 		"waffo_pancake_min_topup": setting.WaffoPancakeMinTopUp,
-		"amount_options":          operation_setting.GetPaymentSetting().AmountOptions,
-		"discount":                operation_setting.GetPaymentSetting().AmountDiscount,
-		"topup_link":              common.TopUpLink,
+		// Preserve legacy configuration fields while exposing the exact request
+		// bounds used by each existing provider validator (including TOKENS mode).
+		"request_min_topup": gin.H{
+			"epay": getMinTopup(), "stripe": getStripeMinTopup(),
+			"waffo": setting.WaffoMinTopUp, "waffo_pancake": setting.WaffoPancakeMinTopUp,
+		},
+		"request_amount_unit": operation_setting.GetQuotaDisplayType(),
+		"amount_options":      operation_setting.GetPaymentSetting().AmountOptions,
+		"discount":            operation_setting.GetPaymentSetting().AmountDiscount,
+		"topup_link":          common.TopUpLink,
 	}
 	common.ApiSuccess(c, data)
 }

@@ -1,0 +1,52 @@
+.date-time-picker {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.modal.date-time-picker-modal {
+  width: min(390px, calc(100vw - 32px));
+}
+.date-time-picker-modal .rdp-root {
+  --rdp-accent-color: var(--focus);
+  --rdp-accent-background-color: var(--accent-soft);
+  --rdp-day-height: 42px;
+  --rdp-day_button-height: 40px;
+  max-width: 100%;
+  font-size: 14px;
+}
+.date-time-picker-modal .rdp-months {
+  max-width: 100%;
+}
+.date-time-picker-modal .rdp-month {
+  width: 100%;
+}
+.date-time-picker-modal .rdp-month_grid {
+  width: 100%;
+  table-layout: fixed;
+  min-width: 0;
+  margin: 0 auto;
+}
+.date-time-picker-modal .rdp-month_grid thead {
+  background: transparent;
+}
+.date-time-picker-modal .rdp-month_grid th,
+.date-time-picker-modal .rdp-month_grid td {
+  padding: 0;
+  border: 0;
+  text-align: center;
+  width: calc(100% / 7);
+}
+.date-time-picker-modal .rdp-month_grid th {
+  padding-block: 8px;
+}
+.date-time-picker-modal .rdp-day_button {
+  width: min(40px, 100%);
+  margin-inline: auto;
+  border-radius: 8px;
+}
+@media (max-width: 350px) {
+  .date-time-picker-modal .rdp-root {
+    --rdp-day-height: 36px;
+    --rdp-day_button-height: 34px;
+  }
+}

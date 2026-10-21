@@ -111,9 +111,11 @@ func (p *TelegramProvider) ExchangeToken(ctx context.Context, code string, c *gi
 	value, _ := c.Get(TelegramOAuthFlowContextKey)
 	flow, ok := value.(*TelegramOAuthFlow)
 	settings := system_setting.GetTelegramSettings()
+	expectedRedirectURI := url.Values{"redirect_uri": {strings.TrimRight(system_setting.ServerAddress, "/") + "/oauth/telegram"}}
+	ApplyConsumerOAuthExchange(c, expectedRedirectURI)
 	if !ok || flow == nil || flow.CodeVerifier == "" || code == "" ||
 		flow.ClientID != strings.TrimSpace(settings.ClientID) ||
-		flow.RedirectURI != strings.TrimRight(system_setting.ServerAddress, "/")+"/oauth/telegram" {
+		flow.RedirectURI != expectedRedirectURI.Get("redirect_uri") {
 		return nil, ErrTelegramOAuthFailed
 	}
 	values := url.Values{

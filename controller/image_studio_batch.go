@@ -186,10 +186,10 @@ func DownloadImageStudioBatch(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	assetsByTask := make(map[string]*model.ImageStudioAsset, len(assets))
+	assetsByTask := make(map[string][]*model.ImageStudioAsset, len(assets))
 	for _, asset := range assets {
-		if asset != nil && asset.UserID == userID && asset.ImageIndex == 1 && asset.Status == model.ImageStudioAssetStatusReady {
-			assetsByTask[asset.TaskID] = asset
+		if asset != nil && asset.UserID == userID && asset.ImageIndex > 0 && asset.Status == model.ImageStudioAssetStatusReady {
+			assetsByTask[asset.TaskID] = append(assetsByTask[asset.TaskID], asset)
 		}
 	}
 
@@ -210,8 +210,8 @@ func DownloadImageStudioBatch(c *gin.Context) {
 		if task == nil {
 			continue
 		}
-		asset := assetsByTask[task.TaskID]
-		if task.Status != model.TaskStatusSuccess || asset == nil {
+		taskAssets := assetsByTask[task.TaskID]
+		if task.Status != model.TaskStatusSuccess || len(taskAssets) == 0 {
 			if task.Status == model.TaskStatusFailure {
 				failureCount++
 				reason := strings.ReplaceAll(strings.ReplaceAll(task.FailReason, "\"", "\"\""), "\n", " ")
@@ -219,29 +219,39 @@ func DownloadImageStudioBatch(c *gin.Context) {
 			}
 			continue
 		}
-		if err := service.ValidateImageStudioAssetOwnership(asset.StorageKey, userID, task.TaskID); err != nil {
-			continue
-		}
-		file, info, err := service.OpenImageStudioAsset(asset.StorageKey, asset.SizeBytes)
-		if err != nil {
-			continue
-		}
-		header := &zip.FileHeader{
-			Name:   fmt.Sprintf("%04d%s", index+1, imageStudioMimeExtension(asset.MimeType)),
-			Method: zip.Store,
-		}
-		header.SetModTime(info.ModTime())
-		entry, createErr := archive.CreateHeader(header)
-		if createErr != nil {
+		wroteTask := false
+		for _, asset := range taskAssets {
+			if err := service.ValidateImageStudioAssetOwnership(asset.StorageKey, userID, task.TaskID); err != nil {
+				continue
+			}
+			file, info, err := service.OpenImageStudioAsset(asset.StorageKey, asset.SizeBytes)
+			if err != nil {
+				continue
+			}
+			name := fmt.Sprintf("%04d%s", index+1, imageStudioMimeExtension(asset.MimeType))
+			if len(taskAssets) > 1 {
+				name = fmt.Sprintf("%04d-%02d%s", index+1, asset.ImageIndex, imageStudioMimeExtension(asset.MimeType))
+			}
+			header := &zip.FileHeader{
+				Name:   name,
+				Method: zip.Store,
+			}
+			header.SetModTime(info.ModTime())
+			entry, createErr := archive.CreateHeader(header)
+			if createErr != nil {
+				_ = file.Close()
+				return
+			}
+			_, copyErr := io.Copy(entry, file)
 			_ = file.Close()
-			return
+			if copyErr != nil {
+				return
+			}
+			wroteTask = true
 		}
-		_, copyErr := io.Copy(entry, file)
-		_ = file.Close()
-		if copyErr != nil {
-			return
+		if wroteTask {
+			successCount++
 		}
-		successCount++
 	}
 
 	manifest, _ := common.Marshal(gin.H{

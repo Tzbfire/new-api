@@ -1,0 +1,90 @@
+.service-group-options {
+  min-inline-size: 0;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.service-group-options > legend {
+  padding: 0;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+.service-group-options-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+}
+.service-group-option.button {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 40px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  background: var(--surface);
+  text-align: left;
+  font-size: 13px;
+  line-height: 20px;
+}
+.service-group-option-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+}
+.service-group-option-label > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 550;
+}
+.service-group-option-ratio {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.service-group-option.button[aria-pressed='true'],
+.service-group-option.button[aria-pressed='true']:hover:not(:disabled) {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--surface);
+}
+.service-group-option.button:disabled {
+  opacity: 0.7;
+}
+.service-group-option[aria-pressed='true'] .service-group-option-ratio {
+  color: inherit;
+  opacity: 0.8;
+}
+.service-group-option > small {
+  font-size: 10px;
+  line-height: 16px;
+  font-weight: 400;
+}
+.service-group-options-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-height: 18px;
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.service-group-options-note > strong {
+  color: var(--ink);
+  font-weight: 550;
+}
+@media (max-width: 600px) {
+  .service-group-option.button {
+    min-height: 42px;
+    padding-inline: 10px;
+  }
+}

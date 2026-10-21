@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env*
+!.env.example
+coverage/
+playwright-report/
+test-results/
+src/i18n/locales/.translation-update.lock
+src/i18n/locales/*.tmp

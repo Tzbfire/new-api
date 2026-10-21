@@ -1,0 +1,45 @@
+.model-price > .quote-status {
+  display: block;
+  min-height: 20px;
+}
+.model-price[aria-busy='true']:not(:has(.quote-result)) {
+  min-height: 160px;
+}
+.request-price {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  min-width: 0;
+}
+.request-price-label {
+  font-size: 10px;
+  color: var(--muted);
+}
+.request-price-amount {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  line-height: 1.3;
+}
+.request-price-amount strong {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+  overflow-wrap: anywhere;
+}
+.request-price-amount > span,
+.request-price > small {
+  font-size: 11px;
+  color: var(--muted);
+}
+.price-comparison-row .request-price-amount strong {
+  font-size: 17px;
+}
+@media (max-width: 700px) {
+  .price-comparison-row .request-price {
+    padding-left: 46px;
+  }
+}

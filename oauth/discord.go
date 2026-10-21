@@ -59,6 +59,7 @@ func (p *DiscordProvider) ExchangeToken(ctx context.Context, code string, c *gin
 	values.Set("code", code)
 	values.Set("grant_type", "authorization_code")
 	values.Set("redirect_uri", redirectUri)
+	ApplyConsumerOAuthExchange(c, values)
 
 	logger.LogDebug(ctx, "[OAuth-Discord] ExchangeToken: redirect_uri=%s", redirectUri)
 

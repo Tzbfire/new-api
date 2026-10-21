@@ -121,42 +121,44 @@ func DownloadImageStudioLibrary(c *gin.Context) {
 		if err != nil {
 			return
 		}
-		assetsByTask := make(map[string]*model.ImageStudioAsset, len(assets))
+		assetsByTask := make(map[string][]*model.ImageStudioAsset, len(assets))
 		for _, asset := range assets {
-			if asset != nil && asset.UserID == userID && asset.ImageIndex == 1 && asset.Status == model.ImageStudioAssetStatusReady {
-				assetsByTask[asset.TaskID] = asset
+			if asset != nil && asset.UserID == userID && asset.ImageIndex > 0 && asset.Status == model.ImageStudioAssetStatusReady {
+				assetsByTask[asset.TaskID] = append(assetsByTask[asset.TaskID], asset)
 			}
 		}
 		for _, task := range tasks {
 			if task == nil {
 				continue
 			}
-			asset := assetsByTask[task.TaskID]
-			if asset == nil {
+			taskAssets := assetsByTask[task.TaskID]
+			if len(taskAssets) == 0 {
 				continue
 			}
-			if err := service.ValidateImageStudioAssetOwnership(asset.StorageKey, userID, task.TaskID); err != nil {
-				continue
-			}
-			file, info, err := service.OpenImageStudioAsset(asset.StorageKey, asset.SizeBytes)
-			if err != nil {
-				continue
-			}
-			written++
-			header := &zip.FileHeader{
-				Name:   fmt.Sprintf("%06d%s", written, imageStudioMimeExtension(asset.MimeType)),
-				Method: zip.Store,
-			}
-			header.SetModTime(info.ModTime())
-			entry, createErr := archive.CreateHeader(header)
-			if createErr != nil {
+			for _, asset := range taskAssets {
+				if err := service.ValidateImageStudioAssetOwnership(asset.StorageKey, userID, task.TaskID); err != nil {
+					continue
+				}
+				file, info, err := service.OpenImageStudioAsset(asset.StorageKey, asset.SizeBytes)
+				if err != nil {
+					continue
+				}
+				written++
+				header := &zip.FileHeader{
+					Name:   fmt.Sprintf("%06d%s", written, imageStudioMimeExtension(asset.MimeType)),
+					Method: zip.Store,
+				}
+				header.SetModTime(info.ModTime())
+				entry, createErr := archive.CreateHeader(header)
+				if createErr != nil {
+					_ = file.Close()
+					return
+				}
+				_, copyErr := io.Copy(entry, file)
 				_ = file.Close()
-				return
-			}
-			_, copyErr := io.Copy(entry, file)
-			_ = file.Close()
-			if copyErr != nil {
-				return
+				if copyErr != nil {
+					return
+				}
 			}
 		}
 		beforeID = tasks[len(tasks)-1].ID

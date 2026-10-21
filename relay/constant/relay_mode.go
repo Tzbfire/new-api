@@ -100,10 +100,12 @@ func Path2RelayMode(path string) int {
 	return relayMode
 }
 
-// NormalizeRequestPath maps browser-session Image Studio endpoints to the
-// canonical OpenAI image paths used by channel capability filtering.
+// NormalizeRequestPath maps browser-session chat and Image Studio endpoints
+// to the canonical API paths used by channel filtering and route resolution.
 func NormalizeRequestPath(path string) string {
 	switch {
+	case path == "/pg/chat/completions":
+		return "/v1/chat/completions"
 	case strings.HasPrefix(path, "/pg/image-studio/estimate"):
 		return "/v1/images/generations"
 	case strings.HasPrefix(path, "/pg/image-studio/generations"):

@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type LinkProps } from '@tanstack/react-router'
-import { type TFunction } from 'i18next'
+import type { LinkProps } from '@tanstack/react-router'
+import type { TFunction } from 'i18next'
 
 /**
  * Base navigation item type
@@ -105,6 +105,8 @@ export type TopNavLink = {
 export type SidebarViewParent = {
   /** Destination URL for the back button */
   to: LinkProps['to'] | (string & {})
+  /** Use a document request when the gateway must handle navigation. */
+  reloadDocument?: boolean
   /** Visible label, e.g. "Back to Dashboard" — already localized */
   label: string
 }

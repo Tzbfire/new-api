@@ -110,6 +110,43 @@ func TestHourlySuccessSeriesWeightsSmallerBuckets(t *testing.T) {
 	assert.Equal(t, []SuccessRatePoint{{Ts: 3600, SuccessRate: 99.01}, {Ts: 7200, SuccessRate: 100}}, points)
 }
 
+func TestPerformanceResponseReportsObservedSamples(t *testing.T) {
+	result := buildQueryResult("test-model", map[bucketKey]counters{
+		{model: "test-model", group: "a", bucketTs: 3600}: {
+			requestCount: 2, successCount: 1, totalLatencyMs: 2000, ttftCount: 1,
+		},
+		{model: "test-model", group: "a", bucketTs: 7200}: {
+			requestCount: 1, successCount: 1, totalLatencyMs: 4000,
+			outputTokens: 200, generationMs: 2000,
+		},
+	})
+	require.Len(t, result.Groups, 1)
+	group := result.Groups[0]
+	assert.Equal(t, int64(3), group.RequestCount)
+	assert.Equal(t, int64(2), group.SuccessCount)
+	assert.Equal(t, int64(1), group.TtftSampleCount)
+	assert.True(t, group.TpsObserved)
+	assert.Equal(t, int64(2000), group.AvgLatencyMs)
+	assert.InDelta(t, 200.0/3, group.SuccessRate, 0.0001)
+	assert.Equal(t, 100.0, group.AvgTps)
+	require.Len(t, group.Series, 2)
+	assert.Equal(t, BucketPoint{
+		Ts: 3600, RequestCount: 2, SuccessCount: 1, TtftSampleCount: 1,
+		AvgLatencyMs: 1000, SuccessRate: 50,
+	}, group.Series[0])
+	assert.Equal(t, BucketPoint{
+		Ts: 7200, RequestCount: 1, SuccessCount: 1, TpsObserved: true,
+		AvgLatencyMs: 4000, SuccessRate: 100, AvgTps: 100,
+	}, group.Series[1])
+	assert.Equal(t, group.Series, result.Series)
+	encoded, err := common.Marshal(result)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"request_count":3`)
+	assert.Contains(t, string(encoded), `"success_count":2`)
+	assert.Contains(t, string(encoded), `"ttft_sample_count":0`)
+	assert.Contains(t, string(encoded), `"tps_observed":false`)
+}
+
 func TestRecentHistoryRejectsOversizedModelLists(t *testing.T) {
 	_, err := QuerySummaryAll(24, nil, make([]string, 51)...)
 	require.EqualError(t, err, "Invalid parameters")

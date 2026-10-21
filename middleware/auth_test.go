@@ -330,6 +330,7 @@ func TestUserAuthAppliesAccessTokenRouteRules(t *testing.T) {
 	router.GET("/api/undeclared", UserAuth(), ok)
 	router.GET("/api/channel/", AdminAuth(), RequirePermission(authz.ChannelRead), ok)
 	router.GET("/api/pricing", TryUserAuth(), ok)
+	router.GET("/api/pricing/quote", TryUserAuth(), ok)
 	router.GET("/api/image-studio/library/tasks", UserAuth(), ok)
 	router.GET("/pg/image-studio/config", UserAuth(), ok)
 
@@ -338,6 +339,8 @@ func TestUserAuthAppliesAccessTokenRouteRules(t *testing.T) {
 		status                          int
 	}{
 		{name: "granted scope on a never expiring token", path: "/api/user/self", token: profile, status: http.StatusOK},
+		{name: "pricing accepts a valid scoped token", path: "/api/pricing", token: usage, status: http.StatusOK},
+		{name: "pricing quote accepts a valid scoped token", path: "/api/pricing/quote", token: usage, status: http.StatusOK},
 		{name: "studio library granted usage scope", path: "/api/image-studio/library/tasks", token: usage, status: http.StatusOK},
 		{name: "studio library denies profile scope", path: "/api/image-studio/library/tasks", token: profile, status: http.StatusForbidden, code: "ACCESS_TOKEN_SCOPE_DENIED", reason: "scope_denied"},
 		{name: "studio generation setup requires browser session", path: "/pg/image-studio/config", token: usage, status: http.StatusForbidden, code: "AUTH_SESSION_REQUIRED", reason: "session_required"},
@@ -392,9 +395,11 @@ func TestUserAuthAppliesAccessTokenRouteRules(t *testing.T) {
 	response = middlewareBearerRequest(router, "/api/user/self", legacy)
 	assert.Equal(t, http.StatusUnauthorized, response.Code)
 	assert.Contains(t, response.Body.String(), `"code":"ACCESS_TOKEN_LEGACY_RETIRED"`)
-	response = middlewareBearerRequest(router, "/api/pricing", legacy)
-	assert.Equal(t, http.StatusOK, response.Code)
-	assert.JSONEq(t, `{"id":0}`, response.Body.String(), "optional authentication treats a retired token as anonymous")
+	for _, path := range []string{"/api/pricing", "/api/pricing/quote"} {
+		response = middlewareBearerRequest(router, path, legacy)
+		assert.Equal(t, http.StatusOK, response.Code)
+		assert.JSONEq(t, `{"id":0}`, response.Body.String(), "optional authentication treats a retired token as anonymous")
+	}
 	assert.Equal(t, http.StatusOK, middlewareBearerRequest(router, "/api/user/self", profile).Code, "the deadline only retires legacy tokens")
 }
 

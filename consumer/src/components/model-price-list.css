@@ -1,0 +1,282 @@
+.modal.model-prices-modal {
+  width: min(1040px, calc(100vw - 40px));
+  padding: 30px 32px 24px;
+}
+.model-prices-modal .modal-heading {
+  margin-bottom: 6px;
+}
+.model-prices-modal > p {
+  margin-bottom: 22px;
+}
+.price-comparison-toolbar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  font-size: 12px;
+}
+.price-comparison-toolbar .search-field {
+  flex: 1;
+  max-width: 340px;
+  min-width: 0;
+}
+.price-comparison-toolbar > span {
+  flex-shrink: 0;
+}
+.price-comparison-unit {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 12px;
+}
+.price-comparison-unit strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+.price-comparison-row,
+.price-comparison-head {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.6fr) minmax(0, 3fr) 36px;
+  align-items: center;
+  gap: 20px;
+}
+.price-comparison-head {
+  padding: 12px 16px;
+  background: var(--surface-2);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.price-comparison-head > div,
+.price-comparison-values {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  text-align: right;
+}
+.price-comparison-item {
+  border-bottom: 1px solid var(--border);
+}
+.price-comparison-row {
+  padding: 12px 16px;
+}
+.price-comparison-item:hover,
+.price-comparison-item[data-expanded] {
+  background: var(--surface-2);
+}
+.price-comparison-model {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.price-comparison-model h3 {
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.price-comparison-model > div > span {
+  font-size: 10px;
+  color: var(--muted);
+}
+.price-comparison-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 10px;
+}
+.price-comparison-icon.image {
+  color: var(--muted);
+  background: var(--surface-2);
+}
+.price-comparison-values {
+  margin: 0;
+}
+.price-comparison-values dt {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.price-comparison-values dd {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+.price-comparison-message {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.price-comparison-message strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.price-comparison-message .button {
+  font-size: 11px;
+  padding: 6px;
+}
+.price-comparison-toggle svg {
+  transition: transform 180ms ease;
+}
+.price-comparison-toggle.button {
+  min-height: 36px;
+  height: 36px;
+  width: 36px;
+  padding: 8px;
+}
+.price-comparison-toggle[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+.price-comparison-detail {
+  padding: 6px 20px 22px;
+  animation: price-detail-in 150ms ease-out;
+}
+.price-comparison-detail-title {
+  font-size: 12px;
+  font-weight: 550;
+  margin: 0 0 10px;
+}
+.price-comparison-detail .model-price {
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.price-comparison-detail .quote-form {
+  margin-bottom: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+}
+.price-comparison-detail .quote-form > .button {
+  grid-column: auto;
+}
+.price-comparison-footnote {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.8;
+  margin-top: 16px;
+}
+@keyframes price-detail-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (max-width: 700px) {
+  .modal.model-prices-modal {
+    width: calc(100vw - 24px);
+    padding: 20px 16px;
+  }
+  .price-comparison-head {
+    display: none;
+  }
+  .price-comparison-unit {
+    font-size: 10px;
+    gap: 4px;
+    flex-direction: column;
+  }
+  .price-comparison-row {
+    grid-template-columns: minmax(0, 1fr) 36px;
+    gap: 14px 8px;
+    padding: 16px 4px;
+  }
+  .price-comparison-values {
+    grid-column: 1/-1;
+    grid-row: 2;
+    text-align: left;
+    gap: 14px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding-left: 46px;
+  }
+  .price-comparison-values dt {
+    position: static;
+    width: auto;
+    height: auto;
+    clip-path: none;
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .price-comparison-toggle {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .price-comparison-message {
+    grid-column: 1/-1;
+    grid-row: 2;
+    padding-left: 46px;
+  }
+  .price-comparison-detail {
+    padding: 0 0 16px;
+  }
+  .price-comparison-detail .model-price {
+    padding: 14px;
+  }
+  .price-comparison-detail .quote-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .price-comparison-detail .quote-form > .button {
+    grid-column: 1/-1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .price-comparison-detail {
+    animation: none;
+  }
+  .price-comparison-toggle svg {
+    transition: none;
+  }
+}
+.model-price-summary {
+  min-width: 0;
+}
+@media (max-width: 700px) {
+  .price-comparison-row > .model-price-summary {
+    grid-column: 1/-1;
+    grid-row: 2;
+  }
+}
+
+/* Each row names its billing unit, so request prices never sit under token columns. */
+.price-comparison-values dt {
+  position: static;
+  width: auto;
+  height: auto;
+  clip-path: none;
+  font-size: 10px;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+.price-comparison-values dd {
+  overflow-wrap: anywhere;
+}
+.price-summary-unit {
+  display: block;
+  text-align: right;
+  margin-top: 6px;
+}
+@media (max-width: 700px) {
+  .price-summary-unit {
+    text-align: left;
+    padding-left: 46px;
+  }
+}

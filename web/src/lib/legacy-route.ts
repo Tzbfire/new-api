@@ -73,6 +73,15 @@ export function resolveLegacyRoute(rawHref: string): string | null {
 
   const pathname = normalizeLegacyPath(source.pathname)
   if (pathname === '/login') {
+    // The independent user interface calls the same login intent `next`.
+    // Sign-in validates the destination against the current origin as usual.
+    if (
+      !source.searchParams.has('redirect') &&
+      source.searchParams.has('next')
+    ) {
+      source.searchParams.set('redirect', source.searchParams.get('next') || '')
+    }
+    source.searchParams.delete('next')
     return buildTargetHref('/sign-in', source)
   }
   if (pathname === '/forbidden') {

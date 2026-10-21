@@ -3,7 +3,6 @@ package router
 import (
 	"embed"
 	"net/http"
-	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/controller"
@@ -33,15 +32,21 @@ func SetWebRouter(router *gin.Engine, assets WebAssets, pluginDispatcher gin.Han
 		},
 		middleware.AccessTokenAudit(),
 		middleware.GlobalWebRateLimit(frontendFS),
-		middleware.Cache(),
-		middleware.ServeFrontendFiles(frontendFS),
+		serveConsumerFrontend(assets.IndexPage),
 		func(c *gin.Context) {
-			if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/assets") {
-				controller.RelayNotFound(c)
+			file, err := frontendFS.Open(c.Request.URL.Path)
+			if err != nil {
 				return
 			}
-			c.Header("Cache-Control", "no-cache")
-			c.Data(http.StatusOK, "text/html; charset=utf-8", assets.IndexPage)
+			defer file.Close()
+			info, err := file.Stat()
+			if err == nil && info.IsDir() {
+				c.AbortWithStatus(http.StatusNotFound)
+			}
 		},
+		middleware.Cache(),
+		middleware.ServeFrontendFiles(frontendFS),
+		serveRetainedLegacyAssets,
+		func(c *gin.Context) { controller.RelayNotFound(c) },
 	)
 }

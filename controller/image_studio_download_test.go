@@ -3,6 +3,7 @@ package controller
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -21,10 +24,25 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type imageStudioArchiveRecorder struct {
+	*httptest.ResponseRecorder
+	beforeResponse func()
+}
+
+func (r *imageStudioArchiveRecorder) WriteHeader(status int) {
+	if r.beforeResponse != nil {
+		callback := r.beforeResponse
+		r.beforeResponse = nil
+		callback()
+	}
+	r.ResponseRecorder.WriteHeader(status)
+}
 
 func setImageStudioDownloadAllForTest(t *testing.T, enabled bool) {
 	t.Helper()
@@ -69,11 +87,24 @@ func createDownloadableImageStudioTask(t *testing.T, userID int, taskID string, 
 
 func TestDownloadImageStudioTaskImagesStreamsOwnedBatchAsZip(t *testing.T) {
 	setupImageStudioAssetDB(t)
-	t.Setenv("IMAGE_STUDIO_STORAGE_PATH", t.TempDir())
+	storageDir, archiveDir := t.TempDir(), t.TempDir()
+	t.Setenv("IMAGE_STUDIO_STORAGE_PATH", storageDir)
+	t.Setenv("TMPDIR", archiveDir)
 	first := createDownloadableImageStudioTask(t, 17, "zip-task-1", color.RGBA{R: 255, A: 255})
 	second := createDownloadableImageStudioTask(t, 17, "zip-task-2", color.RGBA{B: 255, A: 255})
 
-	recorder := httptest.NewRecorder()
+	recorder := &imageStudioArchiveRecorder{ResponseRecorder: httptest.NewRecorder()}
+	recorder.beforeResponse = func() {
+		entries, err := os.ReadDir(archiveDir)
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		info, err := entries[0].Info()
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+		// Once the response is accepted, deleting every source must not turn
+		// this download into a successful but incomplete ZIP.
+		require.NoError(t, os.RemoveAll(storageDir))
+	}
 	context, _ := gin.CreateTestContext(recorder)
 	context.Request = httptest.NewRequest(http.MethodGet, "/api/task/image-studio/download?task_ids=zip-task-1,zip-task-2", nil)
 	context.Set("id", 17)
@@ -82,6 +113,9 @@ func TestDownloadImageStudioTaskImagesStreamsOwnedBatchAsZip(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, "application/zip", recorder.Header().Get("Content-Type"))
 	assert.Equal(t, "no", recorder.Header().Get("X-Accel-Buffering"))
+	entries, err := os.ReadDir(archiveDir)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 	reader, err := zip.NewReader(bytes.NewReader(recorder.Body.Bytes()), int64(recorder.Body.Len()))
 	require.NoError(t, err)
 	require.Len(t, reader.File, 2)
@@ -92,6 +126,56 @@ func TestDownloadImageStudioTaskImagesStreamsOwnedBatchAsZip(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, file.Close())
 		assert.Equal(t, expected, actual)
+	}
+}
+
+func TestDownloadImageStudioTaskImagesRejectsIncompleteArchive(t *testing.T) {
+	for _, scenario := range []string{"missing image", "unavailable temporary directory", "canceled request"} {
+		t.Run(scenario, func(t *testing.T) {
+			setupImageStudioAssetDB(t)
+			storageDir, archiveDir := t.TempDir(), t.TempDir()
+			t.Setenv("IMAGE_STUDIO_STORAGE_PATH", storageDir)
+			t.Setenv("TMPDIR", archiveDir)
+			createDownloadableImageStudioTask(t, 17, "archive-present", color.RGBA{R: 255, A: 255})
+			createDownloadableImageStudioTask(t, 17, "archive-missing", color.RGBA{B: 255, A: 255})
+			expected := http.StatusNotFound
+			request := httptest.NewRequest(http.MethodGet, "/download?task_ids=archive-present,archive-missing", nil)
+			switch scenario {
+			case "missing image":
+				assets, err := model.GetImageStudioAssetsByTaskIDs([]string{"archive-missing"})
+				require.NoError(t, err)
+				require.Len(t, assets, 1)
+				require.NoError(t, service.RemoveImageStudioAsset(assets[0].StorageKey))
+			case "unavailable temporary directory":
+				blocked := filepath.Join(archiveDir, "not-a-directory")
+				require.NoError(t, os.WriteFile(blocked, nil, 0600))
+				t.Setenv("TMPDIR", blocked)
+				expected = http.StatusInternalServerError
+			case "canceled request":
+				ctx, cancel := context.WithCancel(request.Context())
+				cancel()
+				request = request.WithContext(ctx)
+				expected = http.StatusRequestTimeout
+			}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = request
+			c.Set("id", 17)
+			DownloadImageStudioTaskImages(c)
+			assert.Equal(t, expected, recorder.Code)
+			assert.NotEqual(t, "application/zip", recorder.Header().Get("Content-Type"))
+			assert.Empty(t, recorder.Header().Get("Content-Disposition"))
+			assert.NotContains(t, recorder.Body.String(), storageDir)
+			assert.NotContains(t, recorder.Body.String(), archiveDir)
+			entries, err := os.ReadDir(archiveDir)
+			require.NoError(t, err)
+			if scenario == "unavailable temporary directory" {
+				require.Len(t, entries, 1)
+				assert.Equal(t, "not-a-directory", entries[0].Name())
+			} else {
+				assert.Empty(t, entries)
+			}
+		})
 	}
 }
 
@@ -348,12 +432,85 @@ func TestPendingImageStudioDTOHidesPrivatePluginCheckpoint(t *testing.T) {
 	setupImageStudioAssetDB(t)
 	task := &model.Task{TaskID: "pending-private-plugin", UserId: 81, Platform: constant.TaskPlatformImageStudio, Status: model.TaskStatusInProgress}
 	task.Data = json.RawMessage(`{"request":{"model":"test-image"},"plugin":{"key":"vendor","upstream_task_id":"private-provider-id","data":{"secret":"private-provider-response"}}}`)
+	task.PrivateData.RequestId = "public-request-id"
 	require.NoError(t, model.DB.Create(task).Error)
 	taskDTO := &dto.TaskDto{Data: task.Data}
 	sanitizeImageStudioTaskDtoWithAssets(task, taskDTO, nil)
-	assert.JSONEq(t, `{"request":{"model":"test-image"}}`, string(taskDTO.Data))
+	assert.JSONEq(t, `{"request":{"model":"test-image","request_id":"public-request-id"}}`, string(taskDTO.Data))
 	assert.Contains(t, string(task.Data), "private-provider-id")
 	var stored model.Task
 	require.NoError(t, model.DB.First(&stored, task.ID).Error)
 	assert.JSONEq(t, string(task.Data), string(stored.Data))
+}
+
+func TestDownloadImageStudioIncludesEveryOwnedImage(t *testing.T) {
+	for _, scope := range []string{"tasks", "batch", "library"} {
+		t.Run(scope, func(t *testing.T) {
+			setupImageStudioAssetDB(t)
+			setImageStudioDownloadAllForTest(t, true)
+			t.Setenv("IMAGE_STUDIO_STORAGE_PATH", t.TempDir())
+			first := createDownloadableImageStudioTask(t, 93, "multi-download", color.RGBA{R: 255, A: 255})
+			var data bytes.Buffer
+			canvas := image.NewRGBA(image.Rect(0, 0, 2, 2))
+			canvas.SetRGBA(0, 0, color.RGBA{B: 255, A: 255})
+			require.NoError(t, png.Encode(&data, canvas))
+			staged, err := service.StageImageStudioAsset(93, "multi-download", 2, bytes.NewReader(data.Bytes()))
+			require.NoError(t, err)
+			t.Cleanup(staged.Discard)
+			_, err = staged.Publish()
+			require.NoError(t, err)
+			require.NoError(t, model.TransitionImageStudioTaskAssets("multi-download", []model.ImageStudioAssetStatus{model.ImageStudioAssetStatusPending}, model.ImageStudioAssetStatusReady))
+			createDownloadableImageStudioTask(t, 94, "foreign-download", color.RGBA{G: 255, A: 255})
+			batch := &model.ImageStudioBatch{BatchID: "multi-batch", UserID: 93, Mode: "generation", Group: "default", Model: "test", TotalCount: 1, Priority: 10, Status: model.ImageStudioBatchStatusCompleted, BodyKey: ".jobs/multi-batch", RelayPath: "/v1/images/generations"}
+			require.NoError(t, model.CreateImageStudioBatch(batch))
+			task, exists, err := model.GetByTaskId(93, "multi-download")
+			require.NoError(t, err)
+			require.True(t, exists)
+			require.NoError(t, model.CreateImageStudioBatchItem(&model.ImageStudioBatchItem{BatchDBID: batch.ID, TaskDBID: task.ID, BatchIndex: 1}))
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/download?task_ids=multi-download", nil)
+			c.Set("id", 93)
+			c.Params = gin.Params{{Key: "batch_id", Value: batch.BatchID}}
+			switch scope {
+			case "tasks":
+				DownloadImageStudioTaskImages(c)
+			case "batch":
+				DownloadImageStudioBatch(c)
+			case "library":
+				DownloadImageStudioLibrary(c)
+			}
+			require.Equal(t, http.StatusOK, recorder.Code)
+			archive, err := zip.NewReader(bytes.NewReader(recorder.Body.Bytes()), int64(recorder.Body.Len()))
+			require.NoError(t, err)
+			names := map[string]bool{}
+			payloads := [][]byte{}
+			for _, entry := range archive.File {
+				if entry.Name == "manifest.json" || entry.Name == "failures.csv" {
+					if scope == "batch" && entry.Name == "manifest.json" {
+						file, err := entry.Open()
+						require.NoError(t, err)
+						payload, err := io.ReadAll(file)
+						require.NoError(t, err)
+						require.NoError(t, file.Close())
+						var manifest map[string]any
+						require.NoError(t, common.Unmarshal(payload, &manifest))
+						assert.Equal(t, float64(1), manifest["success"])
+					}
+					continue
+				}
+				require.False(t, names[entry.Name])
+				names[entry.Name] = true
+				file, err := entry.Open()
+				require.NoError(t, err)
+				payload, err := io.ReadAll(file)
+				require.NoError(t, err)
+				require.NoError(t, file.Close())
+				payloads = append(payloads, payload)
+			}
+			require.Len(t, payloads, 2)
+			assert.Equal(t, first, payloads[0])
+			assert.Equal(t, data.Bytes(), payloads[1])
+		})
+	}
 }

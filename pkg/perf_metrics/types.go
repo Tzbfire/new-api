@@ -35,20 +35,28 @@ type Summary struct {
 }
 
 type BucketPoint struct {
-	Ts           int64   `json:"ts"`
-	AvgTtftMs    int64   `json:"avg_ttft_ms"`
-	AvgLatencyMs int64   `json:"avg_latency_ms"`
-	SuccessRate  float64 `json:"success_rate"`
-	AvgTps       float64 `json:"avg_tps"`
+	Ts              int64   `json:"ts"`
+	AvgTtftMs       int64   `json:"avg_ttft_ms"`
+	AvgLatencyMs    int64   `json:"avg_latency_ms"`
+	SuccessRate     float64 `json:"success_rate"`
+	AvgTps          float64 `json:"avg_tps"`
+	RequestCount    int64   `json:"request_count"`
+	SuccessCount    int64   `json:"success_count"`
+	TtftSampleCount int64   `json:"ttft_sample_count"`
+	TpsObserved     bool    `json:"tps_observed"`
 }
 
 type GroupResult struct {
-	Group        string        `json:"group"`
-	AvgTtftMs    int64         `json:"avg_ttft_ms"`
-	AvgLatencyMs int64         `json:"avg_latency_ms"`
-	SuccessRate  float64       `json:"success_rate"`
-	AvgTps       float64       `json:"avg_tps"`
-	Series       []BucketPoint `json:"series"`
+	Group           string        `json:"group"`
+	AvgTtftMs       int64         `json:"avg_ttft_ms"`
+	AvgLatencyMs    int64         `json:"avg_latency_ms"`
+	SuccessRate     float64       `json:"success_rate"`
+	AvgTps          float64       `json:"avg_tps"`
+	RequestCount    int64         `json:"request_count"`
+	SuccessCount    int64         `json:"success_count"`
+	TtftSampleCount int64         `json:"ttft_sample_count"`
+	TpsObserved     bool          `json:"tps_observed"`
+	Series          []BucketPoint `json:"series"`
 }
 
 type QueryResult struct {

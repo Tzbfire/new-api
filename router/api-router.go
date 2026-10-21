@@ -50,6 +50,9 @@ func SetApiRouter(router *gin.Engine) {
 		//apiRouter.GET("/midjourney", controller.GetMidjourney)
 		apiRouter.GET("/home_page_content", controller.GetHomePageContent)
 		apiRouter.GET("/pricing", middleware.HeaderNavModuleAuth("pricing"), controller.GetPricing)
+		// Pricing follows the same public/authenticated gate as its catalog;
+		// the API group's per-IP limiter also protects anonymous quote previews.
+		apiRouter.GET("/pricing/quote", middleware.HeaderNavModuleAuth("pricing"), controller.GetPricingQuote)
 		apiRouter.POST("/image-studio/download-ticket", middleware.UserAuth(), middleware.DownloadRateLimit(), controller.CreateImageStudioDownloadTicket)
 		apiRouter.GET("/image-studio/download", middleware.DownloadRateLimit(), controller.DownloadImageStudioWithTicket)
 		imageStudioLibraryRoute := apiRouter.Group("/image-studio/library")

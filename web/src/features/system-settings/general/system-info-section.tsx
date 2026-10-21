@@ -31,7 +31,10 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { useStatus } from '@/hooks/use-status'
+import { handleServerError } from '@/lib/handle-server-error'
 
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
@@ -39,6 +42,8 @@ import {
   SettingsForm,
   SettingsFormGrid,
   SettingsFormGridItem,
+  SettingsSwitchItem,
+  SettingsSwitchContent,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
@@ -47,6 +52,7 @@ import { useUpdateOption } from '../hooks/use-update-option'
 import { isValidTaskPublicAddress } from './task-public-address'
 
 const _systemInfoSchema = z.object({
+  frontend_setting: z.object({ enabled: z.boolean() }).optional(),
   SystemName: z.string().min(1),
   ServerAddress: z.string().optional(),
   TaskPublicAddress: z.string().refine(isValidTaskPublicAddress),
@@ -77,8 +83,12 @@ function normalizeValue(value: unknown): string {
 export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const { status } = useStatus()
 
   const normalizedDefaults: SystemInfoFormValues = {
+    frontend_setting: {
+      enabled: defaultValues.frontend_setting?.enabled ?? true,
+    },
     SystemName: normalizeValue(defaultValues.SystemName),
     ServerAddress: normalizeValue(defaultValues.ServerAddress),
     TaskPublicAddress: normalizeValue(defaultValues.TaskPublicAddress),
@@ -96,6 +106,7 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
   }
 
   const systemInfoSchemaWithI18n = z.object({
+    frontend_setting: z.object({ enabled: z.boolean() }),
     SystemName: z.string().min(1, {
       error: () => t('System name is required'),
     }),
@@ -141,21 +152,57 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
       },
     })
 
+  const handleSave = (event?: React.BaseSyntheticEvent) => {
+    void handleSubmit(event).catch(handleServerError)
+  }
+
   return (
     <>
       <FormNavigationGuard when={isDirty} />
 
       <SettingsSection title={t('System Information')}>
         <Form {...form}>
-          <SettingsForm onSubmit={handleSubmit}>
+          <SettingsForm onSubmit={handleSave}>
             <SettingsPageFormActions
-              onSave={handleSubmit}
+              onSave={handleSave}
               onReset={handleReset}
               isSaving={isSubmitting || updateOption.isPending}
               isResetDisabled={!isDirty}
             />
             <FormDirtyIndicator isDirty={isDirty} />
             <SettingsFormGrid>
+              <SettingsFormGridItem span='full'>
+                <FormField
+                  control={form.control}
+                  name='frontend_setting.enabled'
+                  render={({ field }) => (
+                    <SettingsSwitchItem>
+                      <SettingsSwitchContent>
+                        <FormLabel>{t('Enable new user interface')}</FormLabel>
+                        <FormDescription>
+                          {t(
+                            'Users enter the new interface by default and can switch from the legacy interface. Administration stays unchanged.'
+                          )}
+                        </FormDescription>
+                        {status?.frontend_available === false && (
+                          <FormDescription>
+                            {t(
+                              'New interface assets are unavailable. The legacy interface remains active.'
+                            )}
+                          </FormDescription>
+                        )}
+                      </SettingsSwitchContent>
+                      <FormControl>
+                        <Switch
+                          checked={field.value ?? true}
+                          onCheckedChange={field.onChange}
+                          disabled={isSubmitting || updateOption.isPending}
+                        />
+                      </FormControl>
+                    </SettingsSwitchItem>
+                  )}
+                />
+              </SettingsFormGridItem>
               <FormField
                 control={form.control}
                 name='SystemName'

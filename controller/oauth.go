@@ -1,6 +1,10 @@
 package controller
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -16,20 +20,23 @@ import (
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/oauth2"
 	"gorm.io/gorm"
 )
 
 const oauthAuthFlowTTL = 10 * time.Minute
 
 type oauthStateRequest struct {
-	Provider string          `json:"provider"`
-	Intent   string          `json:"intent"`
-	Aff      string          `json:"aff,omitempty"`
-	Scope    string          `json:"scope,omitempty"`
-	Context  json.RawMessage `json:"context,omitempty"`
+	CallbackTarget string          `json:"callback_target,omitempty"`
+	Provider       string          `json:"provider"`
+	Intent         string          `json:"intent"`
+	Aff            string          `json:"aff,omitempty"`
+	Scope          string          `json:"scope,omitempty"`
+	Context        json.RawMessage `json:"context,omitempty"`
 }
 
 type oauthFlowPayload struct {
+	Consumer        *oauth.ConsumerOAuthFlow       `json:"consumer,omitempty"`
 	AffiliateCode   string                         `json:"affiliate_code,omitempty"`
 	Verification    *service.OAuthVerificationFlow `json:"verification,omitempty"`
 	Telegram        *oauth.TelegramOAuthFlow       `json:"telegram,omitempty"`
@@ -53,6 +60,7 @@ func GenerateOAuthCode(c *gin.Context) {
 	request.Intent = strings.TrimSpace(request.Intent)
 	request.Aff = strings.TrimSpace(request.Aff)
 	if oauth.GetProvider(request.Provider) == nil ||
+		(request.CallbackTarget != "" && request.CallbackTarget != "consumer") ||
 		(request.Intent != model.AuthFlowIntentLogin && request.Intent != model.AuthFlowIntentBind && request.Intent != model.AuthFlowIntentVerify) ||
 		len(request.Aff) > 32 ||
 		(request.Intent != model.AuthFlowIntentLogin && request.Aff != "") ||
@@ -63,6 +71,30 @@ func GenerateOAuthCode(c *gin.Context) {
 	userID := 0
 	sessionID := ""
 	flowPayload := oauthFlowPayload{AffiliateCode: request.Aff}
+	consumerBrowserToken := ""
+	if request.CallbackTarget == "consumer" {
+		if !oauth.ConsumerOAuthOriginAllowed(c.Request) {
+			writeAccountStatusError(c, http.StatusForbidden, "State parameter is empty or mismatched")
+			return
+		}
+		callbackURI, err := oauth.ConsumerCallbackURI(request.Provider)
+		if err != nil {
+			common.ApiErrorT(c, "Invalid parameters")
+			return
+		}
+		secret := make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			writeAuthSessionError(c, err)
+			return
+		}
+		consumerBrowserToken = base64.RawURLEncoding.EncodeToString(secret)
+		hash := sha256.Sum256([]byte(consumerBrowserToken))
+		flowPayload.Consumer = &oauth.ConsumerOAuthFlow{RedirectURI: callbackURI, CodeVerifier: oauth2.GenerateVerifier(), BrowserHash: base64.RawURLEncoding.EncodeToString(hash[:])}
+		if _, err := oauth.ConsumerAuthorizationURL(request.Provider, "", flowPayload.Consumer); err != nil {
+			common.ApiErrorT(c, "Invalid parameters")
+			return
+		}
+	}
 	bindingStarted := false
 	if request.Provider == "telegram" {
 		telegramFlow, err := oauth.NewTelegramOAuthFlow()
@@ -71,6 +103,10 @@ func GenerateOAuthCode(c *gin.Context) {
 			return
 		}
 		flowPayload.Telegram = telegramFlow
+		if flowPayload.Consumer != nil {
+			flowPayload.Telegram.RedirectURI = flowPayload.Consumer.RedirectURI
+			flowPayload.Telegram.CodeVerifier = flowPayload.Consumer.CodeVerifier
+		}
 	}
 	if request.Intent == model.AuthFlowIntentBind || request.Intent == model.AuthFlowIntentVerify {
 		identity, ok := middleware.GetSessionAuthIdentity(c)
@@ -135,6 +171,18 @@ func GenerateOAuthCode(c *gin.Context) {
 	if flowPayload.Telegram != nil {
 		data["authorization_url"] = flowPayload.Telegram.AuthorizationURL(state)
 	}
+	if flowPayload.Consumer != nil {
+		authorizationURL, err := oauth.ConsumerAuthorizationURL(request.Provider, state, flowPayload.Consumer)
+		if err != nil {
+			common.ApiErrorT(c, "Invalid parameters")
+			return
+		}
+		data["authorization_url"] = authorizationURL
+		// 发起浏览器绑定为 HttpOnly 短期 cookie；跨站跳回后由同源回调请求携带。
+		stateHash := sha256.Sum256([]byte(state))
+		cookieName := "__Host-new-api-consumer-oauth-" + base64.RawURLEncoding.EncodeToString(stateHash[:12])
+		http.SetCookie(c.Writer, &http.Cookie{Name: cookieName, Value: consumerBrowserToken, Path: "/", MaxAge: int(oauthAuthFlowTTL.Seconds()), HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -160,6 +208,31 @@ func HandleOAuth(c *gin.Context) {
 	if err != nil {
 		writeAccountStatusError(c, http.StatusForbidden, "State parameter is empty or mismatched")
 		return
+	}
+	var storedPayload oauthFlowPayload
+	// Legacy malformed payloads retain their existing downstream failure and
+	// consumption behavior. Consumer payloads are written only by this handler.
+	_ = common.UnmarshalJsonStr(pendingFlow.Payload, &storedPayload)
+	if storedPayload.Consumer != nil {
+		if !oauth.ConsumerOAuthOriginAllowed(c.Request) {
+			writeAccountStatusError(c, http.StatusForbidden, "State parameter is empty or mismatched")
+			return
+		}
+		stateHash := sha256.Sum256([]byte(state))
+		cookieName := "__Host-new-api-consumer-oauth-" + base64.RawURLEncoding.EncodeToString(stateHash[:12])
+		browserToken, err := c.Cookie(cookieName)
+		hash := sha256.Sum256([]byte(browserToken))
+		if err != nil || browserToken == "" || subtle.ConstantTimeCompare([]byte(base64.RawURLEncoding.EncodeToString(hash[:])), []byte(storedPayload.Consumer.BrowserHash)) != 1 {
+			writeAccountStatusError(c, http.StatusForbidden, "State parameter is empty or mismatched")
+			return
+		}
+		if err := oauth.SetConsumerOAuthFlow(c, providerName, storedPayload.Consumer); err != nil {
+			writeSecurityOperationError(c, model.ErrAuthFlowInvalid)
+			return
+		}
+		// A consumer callback is attempted once. A provider/network failure asks
+		// the browser to start a new authorization instead of replaying this one.
+		http.SetCookie(c.Writer, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
 	}
 
 	consumeMatch := model.AuthFlowMatch{
