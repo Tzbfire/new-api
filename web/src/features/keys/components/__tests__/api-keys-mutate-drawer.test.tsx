@@ -59,9 +59,13 @@ function installApiFixtures(createdPayloads: Array<Record<string, unknown>>) {
           data: {
             success: true,
             data: {
-              auto: { desc: 'Automatic routing', ratio: 'auto' },
-              default: { desc: 'Standard access', ratio: 1 },
-              vip: { desc: 'Priority access', ratio: 2 },
+              auto: {
+                desc: 'Automatic routing',
+                ratio: 'auto',
+                display_order: 0,
+              },
+              default: { desc: 'Standard access', ratio: 1, display_order: 2 },
+              vip: { desc: 'Priority access', ratio: 2, display_order: 1 },
             },
           },
         }
@@ -104,9 +108,9 @@ async function renderCreateDrawer(): Promise<void> {
     {
       success: true,
       data: {
-        auto: { desc: 'Automatic routing', ratio: 'auto' },
-        default: { desc: 'Standard access', ratio: 1 },
-        vip: { desc: 'Priority access', ratio: 2 },
+        auto: { desc: 'Automatic routing', ratio: 'auto', display_order: 0 },
+        default: { desc: 'Standard access', ratio: 1, display_order: 2 },
+        vip: { desc: 'Priority access', ratio: 2, display_order: 1 },
       },
     },
     { updatedAt: freshAt }
@@ -298,4 +302,19 @@ describe('API keys mutate drawer user quota query switch', () => {
     await waitFor(() => expect(createdPayloads).toHaveLength(1))
     expect(createdPayloads[0]?.allow_user_quota_query).toBe(false)
   })
+})
+
+test('shows administrator group order without changing the selected Auto routing policy', async () => {
+  const createdPayloads: Array<Record<string, unknown>> = []
+  installApiFixtures(createdPayloads)
+  await renderCreateDrawer()
+
+  const groupTrigger = getControlByLabel('Group')
+  fireEvent.click(groupTrigger)
+  const options = screen.getAllByRole('option')
+  expect(options).toHaveLength(3)
+  expect(options[0]).toHaveTextContent('Automatic routing')
+  expect(options[1]).toHaveTextContent('Priority access')
+  expect(options[2]).toHaveTextContent('Standard access')
+  expect(groupTrigger).toHaveTextContent('auto')
 })

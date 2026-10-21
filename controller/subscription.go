@@ -2,11 +2,14 @@ package controller
 
 import (
 	"fmt"
+	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -103,6 +106,86 @@ func GetSubscriptionPlans(c *gin.Context) {
 		})
 	}
 	common.ApiSuccess(c, result)
+}
+
+type subscriptionPricingPreview struct {
+	Models                  []model.Pricing `json:"models"`
+	Group                   string          `json:"group"`
+	GroupRatio              float64         `json:"group_ratio"`
+	PurchaseUserGroup       string          `json:"purchase_user_group"`
+	SelectableNow           bool            `json:"selectable_now"`
+	SelectableAfterPurchase bool            `json:"selectable_after_purchase"`
+	AcceptUnsetPrice        bool            `json:"-"`
+}
+
+// subscriptionPlanPricingScope grants only a read-only preview of a published
+// plan. It never changes the user's group or the normal model/token permissions.
+func subscriptionPlanPricingScope(c *gin.Context) (subscriptionPricingPreview, bool) {
+	c.Header("Cache-Control", "private, no-store")
+	preview := subscriptionPricingPreview{}
+	if !requirePaymentCompliance(c) {
+		return preview, false
+	}
+	planID, err := strconv.Atoi(c.Param("id"))
+	group := c.Query("group")
+	if err != nil || planID <= 0 || group == "" || group == "auto" || !ratio_setting.ContainsGroupRatio(group) {
+		common.ApiErrorStatus(c, http.StatusBadRequest, common.NewMessage("Invalid parameters"), nil)
+		return preview, false
+	}
+	var plan model.SubscriptionPlan
+	if err := model.DB.Where("id = ? AND enabled = ?", planID, true).First(&plan).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			common.ApiErrorStatus(c, http.StatusNotFound, common.NewMessage("Invalid parameters"), nil)
+		} else {
+			common.ApiError(c, err)
+		}
+		return preview, false
+	}
+	user, err := model.GetUserCache(c.GetInt("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return preview, false
+	}
+	purchaseUserGroup := strings.TrimSpace(plan.UpgradeGroup)
+	if purchaseUserGroup == "" {
+		purchaseUserGroup = user.Group
+	}
+	selectableAfterPurchase := service.IsUserSelectableGroup(purchaseUserGroup, group)
+	allowedGroups := model.ParseAllowedTokenGroups(plan.AllowedTokenGroups)
+	// A billing scope does not grant group membership. Explicitly advertised
+	// groups may be inspected, but the response must state whether purchase
+	// actually permits their use. Unscoped plans expose only reachable groups.
+	if (len(allowedGroups) > 0 && !slices.Contains(allowedGroups, group)) || (len(allowedGroups) == 0 && !selectableAfterPurchase) {
+		common.ApiErrorStatus(c, http.StatusBadRequest, common.NewMessage("Invalid parameters"), nil)
+		return preview, false
+	}
+	preview.Group = group
+	preview.GroupRatio = service.GetUserGroupRatio(purchaseUserGroup, group)
+	preview.PurchaseUserGroup = purchaseUserGroup
+	preview.SelectableNow = service.IsUserSelectableGroup(user.Group, group)
+	preview.SelectableAfterPurchase = selectableAfterPurchase
+	preview.AcceptUnsetPrice = user.GetSetting().AcceptUnsetRatioModel
+	return preview, true
+}
+
+func GetSubscriptionPlanPricing(c *gin.Context) {
+	preview, ok := subscriptionPlanPricingScope(c)
+	if !ok {
+		return
+	}
+	preview.Models = filterPricingByUsableGroups(model.GetPricing(), map[string]string{preview.Group: ""})
+	if preview.Models == nil {
+		preview.Models = []model.Pricing{}
+	}
+	common.ApiSuccess(c, preview)
+}
+
+func GetSubscriptionPlanPricingQuote(c *gin.Context) {
+	preview, ok := subscriptionPlanPricingScope(c)
+	if !ok {
+		return
+	}
+	writePricingQuote(c, preview.PurchaseUserGroup, preview.AcceptUnsetPrice)
 }
 
 func GetSubscriptionSelf(c *gin.Context) {

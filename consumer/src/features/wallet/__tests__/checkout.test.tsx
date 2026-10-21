@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { createInstance } from 'i18next'
 import { I18nextProvider } from 'react-i18next'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
-import { clearAuth } from '@/lib/auth-state'
+import { acceptAuthBundle, clearAuth, getAuthSnapshot } from '@/lib/auth-state'
 import { SessionProvider } from '@/lib/session'
 import { CheckoutDialog } from '../CheckoutDialog'
 import PlansPage from '../PlansPage'
@@ -137,87 +137,23 @@ describe('provider checkout contracts', () => {
       fetch.mock.calls.filter(([path]) => path === '/api/subscription/balance/pay'),
     ).toHaveLength(1)
   })
-  it.each([true, false])(
-    'shows only the selected available plan group and server price (available: %s)',
-    async (available) => {
-      const fetcher = vi.fn(async (path: string) => {
-        if (path === '/api/status') return Response.json({ success: true, data: {} })
-        if (path === '/api/subscription/plans')
-          return Response.json({
-            success: true,
-            data: [
-              {
-                plan: {
-                  id: 9,
-                  title: 'Code plan',
-                  currency: 'USD',
-                  price_amount: 10,
-                  allowed_token_groups: 'codeplan',
-                  duration_unit: 'month',
-                  duration_value: 1,
-                  total_amount: 0,
-                },
-              },
-            ],
-          })
-        if (path === '/api/subscription/self')
-          return Response.json({
-            success: true,
-            data: { subscriptions: [], all_subscriptions: [] },
-          })
-        if (path === '/api/user/topup/info')
-          return Response.json({ success: true, data: { pay_methods: [] } })
-        if (path === '/api/pricing')
-          return Response.json({
-            success: true,
-            data: [
-              {
-                model_name: 'Authorized code model',
-                supported_endpoint_types: ['openai'],
-                enable_groups: ['codeplan'],
-              },
-              {
-                model_name: 'Other group model',
-                supported_endpoint_types: ['openai'],
-                enable_groups: ['default'],
-              },
-            ],
-            usable_group: available ? { codeplan: 'Code plan' } : { default: 'Default' },
-            group_ratio: { codeplan: 1 },
-          })
-        if (path.startsWith('/api/pricing/quote'))
-          return Response.json({
-            success: true,
-            data: {
-              group: 'codeplan',
-              group_ratio: 1,
-              quotes: [
-                {
-                  label: 'Code model',
-                  billing_mode: 'per_call',
-                  billing_unit: 'request',
-                  usd: 0.42,
-                },
-              ],
-            },
-          })
-        throw new Error(`Unexpected test request ${path}`)
-      })
-      vi.stubGlobal('fetch', fetcher)
-      const i18n = createInstance()
-      await i18n.init({ lng: 'en', resources: { en: { translation: {} } } })
-      render(
-        <I18nextProvider i18n={i18n}>
-          <QueryClientProvider
-            client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
-          >
-            <SessionProvider>
-              <PlansPage />
-            </SessionProvider>
-          </QueryClientProvider>
-        </I18nextProvider>,
-      )
+  it.each([
+    { selectableNow: true, selectableAfterPurchase: true },
+    { selectableNow: false, selectableAfterPurchase: true },
+    { selectableNow: false, selectableAfterPurchase: false },
+  ])(
+    'previews plan models and server prices without requiring current group access: %j',
+    async (permissions) => {
+      const { fetcher, client } = await renderPlanPreview(permissions)
       await userEvent.click(await screen.findByRole('button', { name: 'codeplan' }))
+      expect(await screen.findByText('Plan code model')).toBeVisible()
+      expect(await screen.findByText('$0.42')).toBeVisible()
+      expect(screen.getByText('Plan model preview')).toBeVisible()
+      expect(
+        screen.getByText(
+          'Prices use current rules for account group codeplan after purchase. Final charges follow the rules in effect when used.',
+        ),
+      ).toBeVisible()
       expect(
         screen
           .getByRole('heading', { name: 'Your active plans', hidden: true })
@@ -225,17 +161,79 @@ describe('provider checkout contracts', () => {
             screen.getByRole('heading', { name: 'Available plans', hidden: true }),
           ) & Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy()
-      if (available) {
-        expect(await screen.findByText('Authorized code model')).toBeVisible()
-        expect(await screen.findByText('$0.42')).toBeVisible()
-        expect(
-          fetcher.mock.calls.some(([path]) =>
-            path.startsWith('/api/pricing/quote?model=Authorized%20code%20model&group=codeplan'),
-          ),
-        ).toBe(true)
-      } else expect(await screen.findByText('No models available for this group')).toBeVisible()
+      await userEvent.click(
+        screen.getByRole('button', { name: 'View pricing for Plan code model' }),
+      )
+      expect(await screen.findByText('Usage estimate and billing details')).toBeVisible()
+      await waitFor(() => expect(screen.getAllByText('$0.42')).toHaveLength(2))
       expect(screen.queryByText('Other group model')).not.toBeInTheDocument()
-      expect(fetcher.mock.calls.some(([path]) => path.endsWith('/pay'))).toBe(false)
+      if (!permissions.selectableAfterPurchase)
+        expect(
+          screen.getByText(
+            'This plan covers spending in this group but does not grant access. Contact the administrator before purchasing.',
+          ),
+        ).toBeVisible()
+      else if (!permissions.selectableNow)
+        expect(screen.getByText('Available after purchasing this plan.')).toBeVisible()
+      expect(
+        fetcher.mock.calls.some(
+          ([path]) => path === '/api/subscription/plans/9/pricing?group=codeplan',
+        ),
+      ).toBe(true)
+      expect(
+        fetcher.mock.calls.some(([path]) =>
+          path.startsWith(
+            '/api/subscription/plans/9/pricing/quote?model=Plan%20code%20model&group=codeplan',
+          ),
+        ),
+      ).toBe(true)
+      expect(
+        fetcher.mock.calls.some(
+          ([path]) => path.startsWith('/api/pricing') || path.startsWith('/api/user/models'),
+        ),
+      ).toBe(false)
+      expect(fetcher.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(
+        true,
+      )
+      expect(getAuthSnapshot().user?.group).toBe('default')
+      client.clear()
+    },
+  )
+  it('keeps server price previews separate for plans covering the same group', async () => {
+    const { client, fetcher } = await renderPlanPreview({ secondPlan: true })
+    const buttons = await screen.findAllByRole('button', { name: 'codeplan' })
+    await userEvent.click(buttons[0])
+    expect(await screen.findByText('$0.42')).toBeVisible()
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await userEvent.click(buttons[1])
+    expect(await screen.findByText('$0.84')).toBeVisible()
+    expect(screen.queryByText('$0.42')).not.toBeInTheDocument()
+    expect(
+      fetcher.mock.calls.some(([path]) =>
+        path.startsWith('/api/subscription/plans/10/pricing/quote?'),
+      ),
+    ).toBe(true)
+    client.clear()
+  })
+  it.each(['empty', 'disabled', 'error'] as const)(
+    'shows a truthful %s plan preview without borrowing the account catalog',
+    async (result) => {
+      const { client, fetcher } = await renderPlanPreview({ result })
+      await userEvent.click(await screen.findByRole('button', { name: 'codeplan' }))
+      if (result === 'empty') {
+        expect(
+          await screen.findByText('No models are configured for this plan group yet.'),
+        ).toBeVisible()
+        expect(
+          screen.queryByText('Only models authorized for your account are shown.'),
+        ).not.toBeInTheDocument()
+      } else {
+        expect(await screen.findByRole('alert')).toBeVisible()
+        expect(screen.getByRole('button', { name: 'Try again' })).toBeVisible()
+      }
+      expect(screen.queryByText('Other group model')).not.toBeInTheDocument()
+      expect(fetcher.mock.calls.some(([path]) => path.includes('/pricing/quote'))).toBe(false)
+      client.clear()
     },
   )
   it('preserves the EPay form and sends its requested amount only once', async () => {
@@ -372,3 +370,127 @@ describe('provider checkout contracts', () => {
     expect(screen.getByText(/Payment is confirmed only/)).toBeVisible()
   })
 })
+
+async function renderPlanPreview(
+  options: {
+    selectableNow?: boolean
+    selectableAfterPurchase?: boolean
+    secondPlan?: boolean
+    result?: 'empty' | 'disabled' | 'error'
+  } = {},
+) {
+  acceptAuthBundle({
+    access_token: 'synthetic-plan-preview-session',
+    token_type: 'Bearer',
+    access_expires_at: 9999999999,
+    user: {
+      id: 82,
+      username: 'plan-fixture',
+      display_name: 'Plan fixture',
+      email: '',
+      role: 1,
+      group: 'default',
+      quota: 0,
+      used_quota: 0,
+      request_count: 0,
+    },
+    session: {
+      sid: 'plan-fixture',
+      current: true,
+      login_method: 'password',
+      ip: '',
+      user_agent: '',
+      created_at: 1,
+      last_active_at: 1,
+      expires_at: 9999999999,
+    },
+  })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const model = {
+    model_name: 'Plan code model',
+    supported_endpoint_types: ['openai'],
+    enable_groups: ['codeplan'],
+  }
+  const fetcher = vi.fn(async (path: string, _init?: RequestInit) => {
+    if (path === '/api/status') return Response.json({ success: true, data: {} })
+    if (path === '/api/subscription/plans')
+      return Response.json({
+        success: true,
+        data: (options.secondPlan ? [9, 10] : [9]).map((id) => ({
+          plan: {
+            id,
+            title: `Code plan ${id}`,
+            currency: 'USD',
+            price_amount: 10,
+            allowed_token_groups: 'codeplan',
+            duration_unit: 'month',
+            duration_value: 1,
+            total_amount: 0,
+            quota_reset_period: 'never',
+          },
+        })),
+      })
+    if (path === '/api/subscription/self')
+      return Response.json({ success: true, data: { subscriptions: [], all_subscriptions: [] } })
+    if (path === '/api/user/topup/info')
+      return Response.json({ success: true, data: { pay_methods: [] } })
+    if (/^\/api\/subscription\/plans\/\d+\/pricing\?/.test(path)) {
+      if (options.result === 'disabled')
+        return Response.json({ success: false, message: 'Plan is no longer available' })
+      if (options.result === 'error')
+        return Response.json({ success: false, message: 'Preview unavailable' }, { status: 503 })
+      return Response.json({
+        success: true,
+        data: {
+          group: 'codeplan',
+          group_ratio: 2,
+          purchase_user_group: 'codeplan',
+          selectable_now: options.selectableNow ?? false,
+          selectable_after_purchase: options.selectableAfterPurchase ?? true,
+          models: options.result === 'empty' ? [] : [model],
+        },
+      })
+    }
+    if (/^\/api\/subscription\/plans\/\d+\/pricing\/quote\?/.test(path))
+      return Response.json({
+        success: true,
+        data: {
+          group: 'codeplan',
+          group_ratio: 2,
+          quotes: [
+            {
+              label: 'Code model',
+              billing_mode: 'per_call',
+              billing_unit: 'request',
+              usd: path.includes('/10/') ? 0.84 : 0.42,
+            },
+          ],
+        },
+      })
+    // The general catalog deliberately contains no access to the plan group.
+    if (path === '/api/pricing')
+      return Response.json({
+        success: true,
+        data: [model],
+        usable_group: { default: 'Default' },
+        group_ratio: { default: 1 },
+      })
+    if (path === '/api/user/self/groups')
+      return Response.json({ success: true, data: { default: { desc: 'Default', ratio: 1 } } })
+    if (path.startsWith('/api/user/models')) return Response.json({ success: true, data: [] })
+    throw new Error(`Unexpected test request ${path}`)
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const language = createInstance()
+  await language.init({ lng: 'en', resources: { en: { translation: {} } } })
+  render(
+    <I18nextProvider i18n={language}>
+      <QueryClientProvider client={client}>
+        <SessionProvider>
+          <PlansPage />
+        </SessionProvider>
+      </QueryClientProvider>
+    </I18nextProvider>,
+  )
+  return { client, fetcher }
+}

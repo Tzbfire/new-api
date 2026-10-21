@@ -1,4 +1,5 @@
 import { rawRequest, request } from '@/lib/api'
+import type { PricingModel } from '@/lib/catalog'
 
 export interface PaymentMethod {
   name: string
@@ -58,6 +59,14 @@ export interface SubscriptionPlan {
   creem_product_id?: string
   waffo_pancake_product_id?: string
   max_purchase_per_user: number
+}
+export interface PlanPricingPreview {
+  models: PricingModel[]
+  group: string
+  group_ratio: number
+  purchase_user_group: string
+  selectable_now: boolean
+  selectable_after_purchase: boolean
 }
 export interface UserSubscription {
   id: number
@@ -136,6 +145,12 @@ export function getSubscriptions() {
 }
 export function getPlans() {
   return request<{ plan: SubscriptionPlan }[]>('/api/subscription/plans')
+}
+
+export function getPlanPricing(planId: number, group: string) {
+  return request<PlanPricingPreview>(
+    `/api/subscription/plans/${planId}/pricing?group=${encodeURIComponent(group)}`,
+  )
 }
 
 export function enabledMethods(info: TopupInfo): PaymentMethod[] {

@@ -66,22 +66,27 @@ export function useModelQuote(
   group: string,
   sample = { input: 1000, output: 1000, images: 1 },
   enabled = true,
+  planId?: number,
 ) {
   const identity = useSyncExternalStore(subscribeAuth, () => {
     const auth = getAuthSnapshot()
-    return `${auth.user?.id || 'public'}:${auth.session?.sid || 'anonymous'}`
+    return `${auth.user?.id || 'public'}:${auth.session?.sid || 'anonymous'}:${auth.user?.group || ''}`
   })
   return useQuery<QuoteResponse>({
-    queryKey: ['model-price', identity, model, group, sample],
+    queryKey: ['model-price', identity, model, group, sample, planId],
     placeholderData: (previous, previousQuery) =>
       previousQuery?.queryKey[1] === identity &&
       previousQuery.queryKey[2] === model &&
-      previousQuery.queryKey[3] === group
+      previousQuery.queryKey[3] === group &&
+      previousQuery.queryKey[5] === planId
         ? previous
         : undefined,
     queryFn: async ({ signal }) => {
+      const endpoint = planId
+        ? `/api/subscription/plans/${planId}/pricing/quote`
+        : '/api/pricing/quote'
       const response = await request<QuoteResponse>(
-        `/api/pricing/quote?model=${encodeURIComponent(model)}&group=${encodeURIComponent(group)}&input_tokens=${sample.input}&output_tokens=${sample.output}&image_count=${sample.images}`,
+        `${endpoint}?model=${encodeURIComponent(model)}&group=${encodeURIComponent(group)}&input_tokens=${sample.input}&output_tokens=${sample.output}&image_count=${sample.images}`,
         { signal },
       )
       return {
@@ -100,6 +105,7 @@ export function useModelQuote(
 export function ModelPrice(props: {
   model: string
   group: string
+  planId?: number
   compact?: boolean
   showUnitPrices?: boolean
 }) {
@@ -107,21 +113,20 @@ export function ModelPrice(props: {
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const [draft, setDraft] = useState({ input: 1000, output: 1000, images: 1 })
   const [sample, setSample] = useState(draft)
-  const query = useModelQuote(props.model, props.group, sample)
+  const query = useModelQuote(props.model, props.group, sample, true, props.planId)
+  const data = query.error ? undefined : query.data
   const sampleMatches =
     !query.isPlaceholderData &&
     Boolean(
-      query.data &&
-      query.data.input_tokens === sample.input &&
-      query.data.output_tokens === sample.output &&
-      query.data.image_count === sample.images,
+      data &&
+      data.input_tokens === sample.input &&
+      data.output_tokens === sample.output &&
+      data.image_count === sample.images,
     )
   const requestOnly =
-    Boolean(query.data?.quotes.length) &&
-    query.data!.quotes.every(
-      (quote) => quote.billing_unit === 'request' && !quote.supports_token_input,
-    )
-  const baseOnly = requestOnly && query.data!.quotes.every((quote) => quote.price_scope === 'base')
+    Boolean(data?.quotes.length) &&
+    data!.quotes.every((quote) => quote.billing_unit === 'request' && !quote.supports_token_input)
+  const baseOnly = requestOnly && data!.quotes.every((quote) => quote.price_scope === 'base')
   let statusText = ''
   if (query.isPending) statusText = t('Checking current prices…')
   else if (query.isFetching && !sampleMatches) statusText = t('Updating price for this example…')
@@ -138,14 +143,14 @@ export function ModelPrice(props: {
       aria-busy={query.isFetching}
       className={`model-price ${props.compact ? 'compact-price' : ''}`}
     >
-      {!props.compact && !requestOnly && query.data && (
+      {!props.compact && !requestOnly && data && (
         <p className="muted price-note">
           {t(
             'Tokens measure text processed by the model. Your service plan multiplier adjusts its price.',
           )}
         </p>
       )}
-      {!props.compact && query.data && !baseOnly && (
+      {!props.compact && data && !baseOnly && (
         <form
           className="quote-form"
           onSubmit={(e) => {
@@ -177,7 +182,7 @@ export function ModelPrice(props: {
               </Field>
             </>
           )}
-          {query.data?.supports_image_count && (
+          {data?.supports_image_count && (
             <Field label={t('Images')}>
               <Input
                 type="number"
@@ -205,7 +210,7 @@ export function ModelPrice(props: {
           </Button>
         </div>
       )}
-      {query.data?.quotes.map((quote, index) => {
+      {data?.quotes.map((quote, index) => {
         let content
         if (
           quote.price_scope === 'base' &&
@@ -220,7 +225,7 @@ export function ModelPrice(props: {
               {!props.compact && (
                 <p className="price-note muted">
                   {t('Includes {{ratio}}× service plan multiplier', {
-                    ratio: query.data!.group_ratio,
+                    ratio: data!.group_ratio,
                   })}
                 </p>
               )}
@@ -243,7 +248,7 @@ export function ModelPrice(props: {
               {quote.billing_unit === 'request' ? (
                 <RequestPrice
                   quote={quote}
-                  imageCount={query.data?.supports_image_count ? query.data.image_count : undefined}
+                  imageCount={data?.supports_image_count ? data.image_count : undefined}
                 />
               ) : (
                 <div className="row quote-amount">
@@ -254,8 +259,8 @@ export function ModelPrice(props: {
               {quote.billing_unit === 'token' && (
                 <p className="price-note muted">
                   {t('{{input}} input + {{output}} output tokens', {
-                    input: formatNumber(query.data?.input_tokens ?? sample.input, locale),
-                    output: formatNumber(query.data?.output_tokens ?? sample.output, locale),
+                    input: formatNumber(data?.input_tokens ?? sample.input, locale),
+                    output: formatNumber(data?.output_tokens ?? sample.output, locale),
                   })}
                 </p>
               )}
@@ -264,7 +269,7 @@ export function ModelPrice(props: {
               )}
               <p className="price-note">
                 {t('Includes {{ratio}}× service plan multiplier', {
-                  ratio: query.data!.group_ratio,
+                  ratio: data!.group_ratio,
                 })}
               </p>
               {!props.compact && quote.billing_unit === 'token' && (

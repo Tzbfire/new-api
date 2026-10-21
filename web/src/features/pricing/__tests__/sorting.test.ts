@@ -16,10 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
+import { api } from '@/lib/api'
+
+import { getPricing } from '../api'
 import { SORT_OPTIONS } from '../constants'
 import { sortModels } from '../lib/filters'
+import { getAvailableGroups } from '../lib/model-helpers'
 import type { PricingModel } from '../types'
 
 function pricingModel(
@@ -123,4 +127,77 @@ describe('price sorting', () => {
       )
     }
   )
+})
+
+afterEach(() => vi.restoreAllMocks())
+
+test('pricing group order survives numeric object keys and excludes groups unavailable to the model', async () => {
+  const autoGroups = ['2', '10']
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      group_order: ['10', 'premium', '2'],
+      usable_group: {
+        '2': { desc: '', ratio: 1 },
+        '10': { desc: '', ratio: 1 },
+        premium: { desc: '', ratio: 2 },
+      },
+      auto_groups: autoGroups,
+    },
+  })
+
+  const data = await getPricing()
+  const model = pricingModel('text-model', { enable_groups: ['2', '10'] })
+  expect(getAvailableGroups(model, data.usable_group)).toEqual(['10', '2'])
+  expect(data.auto_groups).toEqual(autoGroups)
+})
+
+test('pricing without display order retains the older server group order', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      usable_group: {
+        premium: { desc: '', ratio: 2 },
+        default: { desc: '', ratio: 1 },
+      },
+    },
+  })
+  const data = await getPricing()
+  expect(
+    getAvailableGroups(
+      pricingModel('text-model', { enable_groups: ['default', 'premium'] }),
+      data.usable_group
+    )
+  ).toEqual(['premium', 'default'])
+})
+
+test('normalizes real API group descriptions without losing zero ratios or configured order', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      group_order: ['premium', '10', '2'],
+      group_ratio: { premium: 2, '10': 0, '2': 1 },
+      usable_group: {
+        '2': 'Standard access',
+        '10': 'Complimentary access',
+        premium: 'Priority access',
+      },
+    },
+  })
+
+  const data = await getPricing()
+  expect(data.usable_group['10']).toMatchObject({
+    desc: 'Complimentary access',
+    ratio: 0,
+  })
+  expect(data.usable_group.premium).toMatchObject({
+    desc: 'Priority access',
+    ratio: 2,
+  })
+  expect(
+    getAvailableGroups(
+      pricingModel('text-model', { enable_groups: ['10', '2', 'premium'] }),
+      data.usable_group
+    )
+  ).toEqual(['premium', '10', '2'])
 })

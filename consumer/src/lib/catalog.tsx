@@ -20,11 +20,13 @@ export interface ServiceGroup {
   id: string
   desc: string
   ratio: number | 'auto'
+  display_order?: number
 }
 interface PricingResponse {
   data: PricingModel[]
   usable_group: Record<string, string>
   group_ratio: Record<string, number>
+  group_order?: string[]
   auto_groups?: string[]
   vendors?: Array<{ id: number; name: string }>
   supported_endpoint?: Record<string, { path?: string; method?: string }>
@@ -56,15 +58,21 @@ function useCatalogData(scope: string, intent?: CatalogIntent) {
     enabled: status === 'authenticated',
     staleTime: 60_000,
   })
+  const publicOrder = new Map(pricing.data?.group_order?.map((id, index) => [id, index]))
   const publicGroups = Object.entries(pricing.data?.usable_group || {}).map(([id, desc]) => ({
     id,
     desc,
     ratio: pricing.data?.group_ratio[id] ?? ('auto' as const),
+    display_order: publicOrder.get(id),
   }))
-  const groups =
+  const groups = (
     status === 'authenticated'
       ? Object.entries(groupQuery.data || {}).map(([id, value]) => ({ id, ...value }))
       : publicGroups
+  ).sort(
+    (a, b) =>
+      (a.display_order ?? Number.MAX_SAFE_INTEGER) - (b.display_order ?? Number.MAX_SAFE_INTEGER),
+  )
   const preferred =
     groups.find((g) => g.id === user?.group) ||
     groups.find((g) => g.id === 'default') ||

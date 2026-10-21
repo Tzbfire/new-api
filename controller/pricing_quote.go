@@ -46,6 +46,33 @@ type pricingQuote struct {
 func GetPricingQuote(c *gin.Context) {
 	c.Header("Cache-Control", "private, no-store")
 	group, name := c.Query("group"), c.Query("model")
+	userGroup := ""
+	acceptUnsetPrice := false
+	if id, authenticated := c.Get("id"); authenticated {
+		user, err := model.GetUserCache(id.(int))
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		userGroup = user.Group
+		acceptUnsetPrice = user.GetSetting().AcceptUnsetRatioModel
+	}
+	if !service.IsUserSelectableGroup(userGroup, group) || name == "" {
+		common.ApiErrorStatus(c, http.StatusBadRequest, common.NewMessage("Invalid parameters"), nil)
+		return
+	}
+	writePricingQuote(c, userGroup, acceptUnsetPrice)
+}
+
+// writePricingQuote shares the canonical quote calculation and unknown-price
+// handling between current-access and subscription purchase previews. Callers
+// validate their own group scope before entering this read-only calculation.
+func writePricingQuote(c *gin.Context, userGroup string, acceptUnsetPrice bool) {
+	group, name := c.Query("group"), c.Query("model")
+	if name == "" {
+		common.ApiErrorStatus(c, http.StatusBadRequest, common.NewMessage("Invalid parameters"), nil)
+		return
+	}
 	scenario := pricingQuoteScenario{InputTokens: 1000, OutputTokens: 1000, ImageCount: 1}
 	for _, field := range []struct {
 		name     string
@@ -64,21 +91,6 @@ func GetPricingQuote(c *gin.Context) {
 			}
 			*field.value = value
 		}
-	}
-	userGroup := ""
-	acceptUnsetPrice := false
-	if id, authenticated := c.Get("id"); authenticated {
-		user, err := model.GetUserCache(id.(int))
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		userGroup = user.Group
-		acceptUnsetPrice = user.GetSetting().AcceptUnsetRatioModel
-	}
-	if !service.IsUserSelectableGroup(userGroup, group) || name == "" {
-		common.ApiErrorStatus(c, http.StatusBadRequest, common.NewMessage("Invalid parameters"), nil)
-		return
 	}
 	for _, item := range model.GetPricing() {
 		if item.ModelName != name || (!slices.Contains(item.EnableGroup, group) && !slices.Contains(item.EnableGroup, "all")) {

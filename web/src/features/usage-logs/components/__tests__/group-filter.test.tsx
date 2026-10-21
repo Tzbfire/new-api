@@ -61,7 +61,10 @@ function FilterFixture() {
 
 async function renderFilter(
   initialEntry = '/usage-logs/common',
-  groups: Record<string, { desc: string; ratio: number }> | null = {
+  groups: Record<
+    string,
+    { desc: string; ratio: number; display_order?: number }
+  > | null = {
     default: { desc: '', ratio: 1 },
     premium: { desc: '', ratio: 2 },
   }
@@ -301,4 +304,20 @@ it('keeps historical auto values editable when auto is the only available group'
   await waitFor(() =>
     expect(router.state.location.search).toMatchObject({ group: 'retired' })
   )
+})
+
+it('orders numeric group names by the server rank while retaining the selected historical filter', async () => {
+  const router = await renderFilter('/usage-logs/common?group=retired', {
+    '2': { desc: '', ratio: 1, display_order: 2 },
+    '10': { desc: '', ratio: 1, display_order: 0 },
+    premium: { desc: '', ratio: 2, display_order: 1 },
+  })
+  const input = screen.getByRole('combobox', { name: 'Group' })
+  await userEvent.click(input)
+  await screen.findByRole('option', { name: 'premium' })
+  expect(
+    screen.getAllByRole('option').map((option) => option.textContent)
+  ).toEqual(['10', 'premium', '2'])
+  expect(input).toHaveValue('retired')
+  expect(router.state.location.search).toMatchObject({ group: 'retired' })
 })

@@ -16,7 +16,7 @@ const priceColumns = [
 ] as const
 
 /** Compare server-issued rates; the existing calculator owns all request examples. */
-export function ModelPriceList(props: { models: PricingModel[]; group: string }) {
+export function ModelPriceList(props: { models: PricingModel[]; group: string; planId?: number }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const [search, setSearch] = useState('')
@@ -63,6 +63,7 @@ export function ModelPriceList(props: { models: PricingModel[]; group: string })
             key={`${props.group}:${model.model_name}`}
             model={model}
             group={props.group}
+            planId={props.planId}
             expanded={expanded === model.model_name}
             onToggle={() => setExpanded(expanded === model.model_name ? '' : model.model_name)}
           />
@@ -79,13 +80,20 @@ export function ModelPriceList(props: { models: PricingModel[]; group: string })
 export function ModelPriceSummary(props: {
   model: string
   group: string
+  planId?: number
   enabled?: boolean
   compact?: boolean
   showExample?: boolean
 }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
-  const query = useModelQuote(props.model, props.group, undefined, props.enabled !== false)
+  const query = useModelQuote(
+    props.model,
+    props.group,
+    undefined,
+    props.enabled !== false,
+    props.planId,
+  )
   const quotes = props.enabled === false || query.error ? [] : query.data?.quotes || []
   const quote = quotes.length === 1 ? quotes[0] : undefined
   const explanation = quote?.billing_explanation
@@ -227,6 +235,7 @@ export function ModelPriceSummary(props: {
 function ModelPriceRow(props: {
   model: PricingModel
   group: string
+  planId?: number
   expanded: boolean
   onToggle: () => void
 }) {
@@ -250,7 +259,11 @@ function ModelPriceRow(props: {
             <span>{isImage ? t('Image creation') : t('AI model')}</span>
           </div>
         </div>
-        <ModelPriceSummary model={props.model.model_name} group={props.group} />
+        <ModelPriceSummary
+          model={props.model.model_name}
+          group={props.group}
+          planId={props.planId}
+        />
         <Button
           variant="ghost"
           className="price-comparison-toggle icon-button"
@@ -265,7 +278,7 @@ function ModelPriceRow(props: {
       {props.expanded && (
         <div id={`${id}-detail`} className="price-comparison-detail">
           <p className="price-comparison-detail-title">{t('Usage estimate and billing details')}</p>
-          <ModelPrice model={props.model.model_name} group={props.group} />
+          <ModelPrice model={props.model.model_name} group={props.group} planId={props.planId} />
         </div>
       )}
     </article>

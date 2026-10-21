@@ -15,7 +15,6 @@ import {
   Select,
 } from '@/components/ui'
 import { toIntlLocale } from '@/i18n/languages'
-import { CatalogProvider, useCatalog } from '@/lib/catalog'
 import { ModelPriceList } from '@/components/model-price-list'
 import { request } from '@/lib/api'
 import { formatDate, formatMoney, formatBalance } from '@/lib/format'
@@ -28,6 +27,7 @@ import {
   createCheckout,
   enabledMethods,
   getPlans,
+  getPlanPricing,
   getSubscriptions,
   getTopupInfo,
   type Checkout,
@@ -51,7 +51,7 @@ export default function PlansPage() {
     subscriptions.data?.all_subscriptions.filter(
       ({ subscription }) => !activeIDs.has(subscription.id),
     ) || []
-  const [viewGroup, setViewGroup] = useState('')
+  const [preview, setPreview] = useState<{ plan: SubscriptionPlan; group: string } | null>(null)
   const [selected, setSelected] = useState<SubscriptionPlan | null>(null)
   const [method, setMethod] = useState('')
   const [checkout, setCheckout] = useState<Checkout | null>(null)
@@ -204,7 +204,11 @@ export default function PlansPage() {
                         .map((value) => value.trim())
                         .filter(Boolean)
                         .map((group) => (
-                          <Button key={group} variant="ghost" onClick={() => setViewGroup(group)}>
+                          <Button
+                            key={group}
+                            variant="ghost"
+                            onClick={() => setPreview({ plan, group })}
+                          >
                             {group}
                           </Button>
                         ))
@@ -316,16 +320,18 @@ export default function PlansPage() {
         </div>
       </Modal>
       <Modal
-        open={!!viewGroup}
-        onClose={() => setViewGroup('')}
-        title={t('Models and pricing')}
-        description={viewGroup}
+        open={!!preview}
+        onClose={() => setPreview(null)}
+        title={t('Plan model preview')}
+        description={preview ? `${preview.plan.title} · ${preview.group}` : undefined}
         className="model-prices-modal"
       >
-        {viewGroup && (
-          <CatalogProvider scope="plan-models" intent={{ key: viewGroup, group: viewGroup }}>
-            <PlanGroupModels group={viewGroup} />
-          </CatalogProvider>
+        {preview && (
+          <PlanGroupModels
+            key={`${preview.plan.id}:${preview.group}`}
+            planId={preview.plan.id}
+            group={preview.group}
+          />
         )}
       </Modal>
       <CheckoutDialog
@@ -339,17 +345,46 @@ export default function PlansPage() {
   )
 }
 
-function PlanGroupModels(props: { group: string }) {
+function PlanGroupModels(props: { planId: number; group: string }) {
   const { t } = useTranslation()
-  const catalog = useCatalog()
-  if (catalog.isPending) return <LoadingState />
-  if (catalog.error) return <ErrorState error={catalog.error} retry={catalog.refetch} />
-  if (catalog.group !== props.group || !catalog.models.length)
-    return (
-      <EmptyState
-        title={t('No models available for this group')}
-        description={t('Only models authorized for your account are shown.')}
-      />
-    )
-  return <ModelPriceList models={catalog.models} group={props.group} />
+  const session = useSession()
+  const preview = useQuery({
+    queryKey: [
+      'plan-pricing',
+      session.user?.id,
+      session.sessionId,
+      session.user?.group,
+      props.planId,
+      props.group,
+    ],
+    queryFn: () => getPlanPricing(props.planId, props.group),
+    enabled: session.status === 'authenticated',
+  })
+  if (preview.isPending) return <LoadingState />
+  if (preview.error)
+    return <ErrorState error={preview.error} retry={() => void preview.refetch()} />
+  const data = preview.data
+  if (!data.models.length)
+    return <EmptyState title={t('No models are configured for this plan group yet.')} />
+  return (
+    <div className="stack">
+      <p className="muted">
+        {t(
+          'Prices use current rules for account group {{group}} after purchase. Final charges follow the rules in effect when used.',
+          { group: data.purchase_user_group },
+        )}
+      </p>
+      {!data.selectable_after_purchase && (
+        <p role="status" className="muted">
+          {t(
+            'This plan covers spending in this group but does not grant access. Contact the administrator before purchasing.',
+          )}
+        </p>
+      )}
+      {!data.selectable_now && data.selectable_after_purchase && (
+        <p className="muted">{t('Available after purchasing this plan.')}</p>
+      )}
+      <ModelPriceList models={data.models} group={data.group} planId={props.planId} />
+    </div>
+  )
 }

@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -12,10 +13,241 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func requestSubscriptionPricingTest(t *testing.T, handler gin.HandlerFunc, userID, planID int, query string, response any) *httptest.ResponseRecorder {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Set("id", userID)
+	context.Params = gin.Params{{Key: "id", Value: strconv.Itoa(planID)}}
+	context.Request = httptest.NewRequest(http.MethodGet, "/preview"+query, nil)
+	handler(context)
+	if response != nil {
+		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), response))
+	}
+	return recorder
+}
+
+func TestSubscriptionPlanPricingPreviewPreservesPermissionsAndPurchasePrices(t *testing.T) {
+	user, _ := setupSecurityEnrollmentTest(t)
+	db := model.DB
+	setPublicPlanCompliance(t, true)
+	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.Channel{}, &model.Ability{}, &model.Model{}, &model.Vendor{}))
+	previousGroups := setting.UserUsableGroups2JSONString()
+	previousRatios := ratio_setting.GroupRatio2JSONString()
+	previousGroupRatios := ratio_setting.GroupGroupRatio2JSONString()
+	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	previousModelPrices := ratio_setting.ModelPrice2JSONString()
+	previousCompletionRatios := ratio_setting.CompletionRatio2JSONString()
+	previousSpecialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.ReadAll()
+	previousQuota, previousSelfUse := common.QuotaPerUnit, operation_setting.SelfUseModeEnabled
+	t.Cleanup(func() {
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousGroups))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousRatios))
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(previousGroupRatios))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(previousModelPrices))
+		require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(previousCompletionRatios))
+		ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Clear()
+		ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.AddAll(previousSpecialGroups)
+		common.QuotaPerUnit, operation_setting.SelfUseModeEnabled = previousQuota, previousSelfUse
+		model.InvalidatePricingCache()
+	})
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default"}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"codeplan":2,"private":3,"empty":1}`))
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(`{"default":{"codeplan":4},"codeplan":{"codeplan":0.5}}`))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"plan-preview-token":2}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"plan-preview-request":0.4}`))
+	require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(`{"plan-preview-token":3}`))
+	ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Clear()
+	common.QuotaPerUnit, operation_setting.SelfUseModeEnabled = 500000, false
+	user.Quota = 12345
+	require.NoError(t, db.Model(user).Update("quota", user.Quota).Error)
+	channel := model.Channel{Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Name: "preview", Key: "synthetic-test-key"}
+	require.NoError(t, db.Create(&channel).Error)
+	for name, group := range map[string]string{
+		"plan-preview-token": "codeplan", "plan-preview-request": "codeplan", "plan-preview-unknown": "codeplan",
+		"plan-preview-public": "default", "plan-preview-private": "private",
+	} {
+		require.NoError(t, db.Create(&model.Ability{Group: group, Model: name, ChannelId: channel.Id, Enabled: true}).Error)
+	}
+	model.InvalidatePricingCache()
+	plans := []model.SubscriptionPlan{
+		{Title: "Upgrade plan", Enabled: true, AllowedTokenGroups: `["codeplan","empty"]`, UpgradeGroup: "codeplan"},
+		{Title: "Billing scope only", Enabled: true, AllowedTokenGroups: "codeplan"},
+		{Title: "Unscoped upgrade", Enabled: true, UpgradeGroup: "codeplan"},
+		{Title: "Unrelated plan", Enabled: true, AllowedTokenGroups: "default"},
+		{Title: "Disabled plan", Enabled: true, AllowedTokenGroups: "codeplan", UpgradeGroup: "codeplan"},
+	}
+	for i := range plans {
+		require.NoError(t, db.Create(&plans[i]).Error)
+	}
+	require.NoError(t, db.Model(&plans[4]).Update("enabled", false).Error)
+
+	t.Run("published upgrade offers exact models and purchase ratio without granting access", func(t *testing.T) {
+		var response struct {
+			Success bool                       `json:"success"`
+			Data    subscriptionPricingPreview `json:"data"`
+		}
+		recorder := requestSubscriptionPricingTest(t, GetSubscriptionPlanPricing, user.Id, plans[0].Id, "?group=codeplan", &response)
+		require.Equal(t, http.StatusOK, recorder.Code)
+		require.True(t, response.Success)
+		assert.Equal(t, "private, no-store", recorder.Header().Get("Cache-Control"))
+		assert.Equal(t, "codeplan", response.Data.Group)
+		assert.Equal(t, "codeplan", response.Data.PurchaseUserGroup)
+		assert.Equal(t, 0.5, response.Data.GroupRatio)
+		assert.False(t, response.Data.SelectableNow)
+		assert.True(t, response.Data.SelectableAfterPurchase)
+		var names []string
+		for _, item := range response.Data.Models {
+			names = append(names, item.ModelName)
+		}
+		assert.ElementsMatch(t, []string{"plan-preview-token", "plan-preview-request", "plan-preview-unknown"}, names)
+		assert.NotContains(t, recorder.Body.String(), "accept_unset_price")
+	})
+
+	t.Run("quotes share configured token request and unavailable price semantics", func(t *testing.T) {
+		for _, tc := range []struct {
+			model  string
+			usd    float64
+			reason string
+		}{
+			{"plan-preview-token", 0.008, ""},
+			{"plan-preview-request", 0.2, ""},
+			{"plan-preview-unknown", 0, "pricing_not_configured"},
+		} {
+			var response struct {
+				Success bool `json:"success"`
+				Data    struct {
+					GroupRatio float64        `json:"group_ratio"`
+					Quotes     []pricingQuote `json:"quotes"`
+				} `json:"data"`
+			}
+			recorder := requestSubscriptionPricingTest(t, GetSubscriptionPlanPricingQuote, user.Id, plans[0].Id, "?group=codeplan&model="+tc.model, &response)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			require.True(t, response.Success)
+			assert.Equal(t, 0.5, response.Data.GroupRatio)
+			require.Len(t, response.Data.Quotes, 1)
+			quote := response.Data.Quotes[0]
+			assert.Equal(t, tc.reason, quote.UnavailableReason)
+			if tc.reason != "" {
+				assert.Nil(t, quote.USD)
+				assert.Nil(t, quote.Quota)
+			} else {
+				require.NotNil(t, quote.USD)
+				assert.InDelta(t, tc.usd, *quote.USD, 1e-9)
+			}
+		}
+	})
+
+	t.Run("billing scope does not promise permissions or inherit upgrade prices", func(t *testing.T) {
+		var response struct {
+			Success bool                       `json:"success"`
+			Data    subscriptionPricingPreview `json:"data"`
+		}
+		requestSubscriptionPricingTest(t, GetSubscriptionPlanPricing, user.Id, plans[1].Id, "?group=codeplan", &response)
+		require.True(t, response.Success)
+		assert.False(t, response.Data.SelectableNow)
+		assert.False(t, response.Data.SelectableAfterPurchase)
+		assert.Equal(t, "default", response.Data.PurchaseUserGroup)
+		assert.Equal(t, 4.0, response.Data.GroupRatio)
+	})
+
+	t.Run("unscoped plan shows only groups usable after purchase", func(t *testing.T) {
+		for _, group := range []string{"codeplan", "default"} {
+			var response struct {
+				Success bool                       `json:"success"`
+				Data    subscriptionPricingPreview `json:"data"`
+			}
+			requestSubscriptionPricingTest(t, GetSubscriptionPlanPricing, user.Id, plans[2].Id, "?group="+group, &response)
+			require.True(t, response.Success)
+			assert.True(t, response.Data.SelectableAfterPurchase)
+		}
+	})
+
+	t.Run("rejects invalid plans scopes models and quantities", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			plan    int
+			query   string
+			handler gin.HandlerFunc
+			status  int
+		}{
+			{"disabled plan", plans[4].Id, "?group=codeplan", GetSubscriptionPlanPricing, 404},
+			{"missing plan", plans[4].Id + 1000, "?group=codeplan", GetSubscriptionPlanPricing, 404},
+			{"invalid plan", 0, "?group=codeplan", GetSubscriptionPlanPricing, 400},
+			{"other plan scope", plans[3].Id, "?group=codeplan", GetSubscriptionPlanPricing, 400},
+			{"hidden group", plans[0].Id, "?group=private", GetSubscriptionPlanPricing, 400},
+			{"unscoped hidden group", plans[2].Id, "?group=private", GetSubscriptionPlanPricing, 400},
+			{"missing group", plans[0].Id, "", GetSubscriptionPlanPricing, 400},
+			{"auto group", plans[0].Id, "?group=auto", GetSubscriptionPlanPricing, 400},
+			{"unknown group", plans[0].Id, "?group=missing", GetSubscriptionPlanPricing, 400},
+			{"quote other plan", plans[3].Id, "?group=codeplan&model=plan-preview-token", GetSubscriptionPlanPricingQuote, 400},
+			{"quote disabled plan", plans[4].Id, "?group=codeplan&model=plan-preview-token", GetSubscriptionPlanPricingQuote, 404},
+			{"quote missing model", plans[0].Id, "?group=codeplan", GetSubscriptionPlanPricingQuote, 400},
+			{"quote other model", plans[0].Id, "?group=codeplan&model=plan-preview-private", GetSubscriptionPlanPricingQuote, 404},
+			{"quote invalid quantity", plans[0].Id, "?group=codeplan&model=plan-preview-token&image_count=129", GetSubscriptionPlanPricingQuote, 400},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var response struct {
+					Success bool `json:"success"`
+				}
+				recorder := requestSubscriptionPricingTest(t, tc.handler, user.Id, tc.plan, tc.query, &response)
+				assert.Equal(t, tc.status, recorder.Code)
+				assert.False(t, response.Success)
+				assert.NotContains(t, recorder.Body.String(), "model_name")
+			})
+		}
+	})
+
+	t.Run("legitimate empty group remains empty", func(t *testing.T) {
+		var response struct {
+			Success bool                       `json:"success"`
+			Data    subscriptionPricingPreview `json:"data"`
+		}
+		requestSubscriptionPricingTest(t, GetSubscriptionPlanPricing, user.Id, plans[0].Id, "?group=empty", &response)
+		require.True(t, response.Success)
+		assert.Empty(t, response.Data.Models)
+	})
+
+	t.Run("preview leaves actual group wallet and regular catalogue unchanged", func(t *testing.T) {
+		var stored model.User
+		require.NoError(t, db.First(&stored, user.Id).Error)
+		assert.Equal(t, user.Group, stored.Group)
+		assert.Equal(t, user.Quota, stored.Quota)
+		assert.False(t, service.IsUserSelectableGroup(stored.Group, "codeplan"))
+		var response struct {
+			Success bool            `json:"success"`
+			Data    []model.Pricing `json:"data"`
+		}
+		requestSubscriptionPricingTest(t, GetPricing, user.Id, 0, "", &response)
+		require.True(t, response.Success)
+		require.Len(t, response.Data, 1)
+		assert.Equal(t, "plan-preview-public", response.Data[0].ModelName)
+		recorder := requestSubscriptionPricingTest(t, GetPricingQuote, user.Id, 0, "?group=codeplan&model=plan-preview-token&plan_id="+strconv.Itoa(plans[0].Id), nil)
+		assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	})
+
+	t.Run("payment compliance gates both preview endpoints", func(t *testing.T) {
+		setPublicPlanCompliance(t, false)
+		for _, handler := range []gin.HandlerFunc{GetSubscriptionPlanPricing, GetSubscriptionPlanPricingQuote} {
+			var response struct {
+				Success bool `json:"success"`
+			}
+			recorder := requestSubscriptionPricingTest(t, handler, user.Id, plans[0].Id, "?group=codeplan&model=plan-preview-token", &response)
+			assert.False(t, response.Success)
+			assert.NotContains(t, recorder.Body.String(), "model_name")
+		}
+	})
+}
 
 func TestPricingQuotePublicGateUsesIPRateLimitWithoutRequiringUser(t *testing.T) {
 	previousRedis, previousAPIEnabled, previousSearchEnabled := common.RedisEnabled, common.GlobalApiRateLimitEnable, common.SearchRateLimitEnable

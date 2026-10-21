@@ -17,7 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
+  act,
+  renderHook,
   fireEvent,
   render,
   screen,
@@ -25,12 +28,15 @@ import {
   waitFor,
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useForm } from 'react-hook-form'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 
+import { api } from '@/lib/api'
+
 import { SettingsPageProvider } from '../../components/settings-page-context'
+import { useUpdateOption } from '../../hooks/use-update-option'
 import { positiveIntegerSchema } from '../../utils/numeric-field'
 import { GroupRatioForm } from '../group-ratio-form'
 
@@ -40,6 +46,7 @@ const defaults = {
   UserUsableGroups: '{"default":"Standard access","vip":"Premium access"}',
   GroupGroupRatio: '{}',
   AutoGroups: '["default","vip"]',
+  GroupDisplayOrder: '[]',
   MaxTokenAutoGroups: 5,
   DefaultUseAutoGroup: false,
   GroupSpecialUsableGroup: '{}',
@@ -51,6 +58,7 @@ const schema = z.object({
   UserUsableGroups: z.string(),
   GroupGroupRatio: z.string(),
   AutoGroups: z.string(),
+  GroupDisplayOrder: z.string(),
   MaxTokenAutoGroups: positiveIntegerSchema('Enter a positive integer'),
   DefaultUseAutoGroup: z.boolean(),
   GroupSpecialUsableGroup: z.string(),
@@ -79,6 +87,115 @@ function Fixture(props: {
 }
 
 describe('group settings workspace', () => {
+  it('saves user display order independently of pricing and automatic routing', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async (_values: typeof defaults) => {})
+    render(<Fixture onSave={onSave} />)
+    await user.click(screen.getByRole('tab', { name: 'Group display order' }))
+    const list = screen.getByRole('list', { name: 'Group display order' })
+    expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent(
+      'default'
+    )
+    expect(
+      within(list).queryByRole('button', { name: 'Remove vip' })
+    ).not.toBeInTheDocument()
+    await user.click(within(list).getByRole('button', { name: 'Move vip up' }))
+    expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('vip')
+    await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(JSON.parse(onSave.mock.calls[0][0].GroupDisplayOrder)).toEqual([
+      'vip',
+      'default',
+    ])
+    expect(onSave.mock.calls[0][0].AutoGroups).toBe(defaults.AutoGroups)
+    expect(onSave.mock.calls[0][0].GroupRatio).toBe(defaults.GroupRatio)
+  })
+
+  it('appends newly available groups, ignores retired groups and restores default display order', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async (_values: typeof defaults) => {})
+    render(
+      <Fixture
+        onSave={onSave}
+        initial={{ GroupDisplayOrder: '["vip","retired"]' }}
+      />
+    )
+    await user.click(screen.getByRole('tab', { name: 'Group display order' }))
+    const list = screen.getByRole('list', { name: 'Group display order' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2)
+    expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('vip')
+    expect(within(list).queryByText('retired')).not.toBeInTheDocument()
+    await user.click(
+      screen.getByRole('button', { name: 'Restore default order' })
+    )
+    expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent(
+      'default'
+    )
+    expect(
+      screen.getByRole('button', { name: 'Restore default order' })
+    ).toBeDisabled()
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(JSON.parse(onSave.mock.calls[0][0].GroupDisplayOrder)).toEqual([])
+  })
+
+  it('reorders the display list from its keyboard drag handle and keeps edits between editor modes', async () => {
+    const user = userEvent.setup()
+    render(<Fixture />)
+    await user.click(screen.getByRole('tab', { name: 'Group display order' }))
+    const list = screen.getByRole('list', { name: 'Group display order' })
+    const handle = within(list).getByRole('button', {
+      name: 'Drag default to reorder',
+    })
+    handle.focus()
+    await user.keyboard('{ArrowDown}{ArrowDown}')
+    expect(within(list).getAllByRole('listitem')[1]).toHaveTextContent(
+      'default'
+    )
+    expect(handle).toHaveFocus()
+    await user.click(screen.getByRole('button', { name: 'Switch to JSON' }))
+    await user.click(screen.getByRole('button', { name: 'Switch to Visual' }))
+    expect(
+      within(
+        screen.getByRole('list', { name: 'Group display order' })
+      ).getAllByRole('listitem')[0]
+    ).toHaveTextContent('vip')
+  })
+
+  it('keeps a single display group fixed and includes the automatic option when selectable', async () => {
+    const user = userEvent.setup()
+    render(
+      <Fixture
+        initial={{
+          GroupRatio: '{}',
+          TopupGroupRatio: '{}',
+          UserUsableGroups: '{"auto":"Automatic selection"}',
+        }}
+      />
+    )
+    await user.click(screen.getByRole('tab', { name: 'Group display order' }))
+    const list = screen.getByRole('list', { name: 'Group display order' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(1)
+    expect(within(list).getByText('Automatic selection')).toBeVisible()
+    expect(
+      within(list).getByRole('button', { name: 'Move auto up' })
+    ).toBeDisabled()
+    expect(
+      within(list).getByRole('button', { name: 'Move auto down' })
+    ).toBeDisabled()
+    const handle = within(list).getByRole('button', {
+      name: 'Drag auto to reorder',
+    })
+    handle.focus()
+    await user.keyboard('{ArrowUp}{ArrowDown}')
+    expect(within(list).getByRole('listitem')).toHaveTextContent('auto')
+  })
+
   it('filters by description and clears search without discarding edits', async () => {
     const user = userEvent.setup()
     render(<Fixture />)
@@ -128,7 +245,9 @@ describe('group settings workspace', () => {
         .map((input) => input.value)
     ).toEqual(['group_2', 'group_1', 'default', 'vip'])
 
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() => expect(onSave).toHaveBeenCalled())
     const saved = onSave.mock.calls[0][0]
     expect(JSON.parse(saved.GroupRatio)).toEqual({
@@ -201,7 +320,9 @@ describe('group settings workspace', () => {
     expect(screen.getByRole('button', { name: 'Move vip up' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Move vip down' })).toBeDisabled()
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() => expect(onSave).toHaveBeenCalled())
     expect(onSave.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
@@ -244,7 +365,9 @@ describe('group settings workspace', () => {
     )
     expect(screen.getByText('Not in pricing table')).toBeVisible()
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() => expect(onSave).toHaveBeenCalled())
     expect(JSON.parse(onSave.mock.calls[0][0].AutoGroups)).toEqual([
       'vip',
@@ -286,7 +409,9 @@ describe('group settings workspace', () => {
       { target: { value: '0' } }
     )
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() =>
       expect(
         screen.getByRole('tab', { name: 'Auto group order' })
@@ -318,6 +443,13 @@ describe('group settings workspace', () => {
       screen.getByText('No groups yet. Add a group to get started.')
     ).toBeVisible()
     expect(screen.getByRole('button', { name: 'Saving...' })).toBeDisabled()
+    await user.click(screen.getByRole('tab', { name: 'Group display order' }))
+    expect(
+      screen.queryByRole('list', { name: 'Group display order' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Restore default order' })
+    ).toBeDisabled()
     await user.click(screen.getByRole('tab', { name: 'Special ratio rules' }))
     expect(
       screen.getByText('Base group ratios apply until you add an override.')
@@ -342,4 +474,82 @@ describe('group settings workspace', () => {
       screen.getAllByRole('textbox', { name: 'Group description' })[1]
     ).toHaveValue('Updated description')
   })
+})
+
+describe('saved group display order cache refresh', () => {
+  it.each([
+    ['group_setting.display_order', true, true],
+    ['group_setting.display_order', false, false],
+    ['ServerAddress', true, false],
+  ])(
+    'saving %s with success=%s refreshes group displays only when needed',
+    async (key, success, refreshGroups) => {
+      const put = vi.spyOn(api, 'put').mockResolvedValue({
+        data: { success, message: success ? '' : 'Save rejected' },
+      })
+      const client = new QueryClient({
+        defaultOptions: {
+          queries: { staleTime: 5 * 60 * 1000, retry: false },
+          mutations: { retry: false },
+        },
+      })
+      const groupQueries = [
+        ['groups'],
+        ['user-groups'],
+        ['playground-groups'],
+        ['image-studio', 'groups'],
+        ['pricing'],
+      ]
+      const preservedQueries = [
+        ['token-auto-groups'],
+        ['playground-models', 'default'],
+      ]
+      for (const queryKey of [...groupQueries, ...preservedQueries]) {
+        client.setQueryData(queryKey, ['default', 'vip'])
+      }
+      const { result, unmount } = renderHook(() => useUpdateOption(), {
+        wrapper: (props: { children: ReactNode }) => (
+          <QueryClientProvider client={client}>
+            {props.children}
+          </QueryClientProvider>
+        ),
+      })
+
+      try {
+        await act(async () => {
+          const save = result.current.mutateAsync({
+            key,
+            value: '["vip","default"]',
+          })
+          if (success) await save
+          else await expect(save).rejects.toThrow('Save rejected')
+        })
+        expect(put).toHaveBeenCalledWith('/api/option/', {
+          key,
+          value: '["vip","default"]',
+        })
+        for (const queryKey of groupQueries) {
+          // A user returning before the normal five-minute TTL must see the new order.
+          const data = await client.fetchQuery({
+            queryKey,
+            queryFn: async () => ['vip', 'default'],
+          })
+          expect(data).toEqual(
+            refreshGroups ? ['vip', 'default'] : ['default', 'vip']
+          )
+        }
+        for (const queryKey of preservedQueries) {
+          const data = await client.fetchQuery({
+            queryKey,
+            queryFn: async () => ['vip', 'default'],
+          })
+          expect(data).toEqual(['default', 'vip'])
+        }
+      } finally {
+        unmount()
+        client.clear()
+        put.mockRestore()
+      }
+    }
+  )
 })

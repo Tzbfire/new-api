@@ -642,3 +642,73 @@ it('shows only image quantity for a fixed image request instead of unrelated tok
   expect(screen.queryByRole('spinbutton', { name: 'Output tokens' })).not.toBeInTheDocument()
   expect(screen.getByRole('spinbutton', { name: 'Images' })).toHaveValue(1)
 })
+
+it.each([true, false])(
+  'uses administrator group order, including numeric names, without changing selection (signed in: %s)',
+  async (authenticated) => {
+    let order = ['premium', '10', '2', 'everyday']
+    if (authenticated) acceptAuthBundle(bundle)
+    else document.cookie = 'new_api_has_session=; Max-Age=0; path=/'
+    localStorage.setItem('factory:choice:42:chat:group', 'everyday')
+    localStorage.setItem('factory:choice:public:chat:group', 'everyday')
+    const fetcher = vi.fn(async (path: string) => {
+      const url = new URL(path, 'http://localhost')
+      if (url.pathname === '/api/user/auth/refresh')
+        return Response.json({ success: true, data: bundle })
+      if (url.pathname === '/api/pricing')
+        return Response.json({
+          success: true,
+          data: [],
+          usable_group: { everyday: 'Everyday', 2: 'Two', 10: 'Ten', premium: 'Premium' },
+          group_ratio: { everyday: 1, 2: 1, 10: 1, premium: 2 },
+          group_order: [...order, 'unauthorized'],
+        })
+      if (url.pathname === '/api/user/self/groups')
+        return Response.json({
+          success: true,
+          data: Object.fromEntries(
+            ['everyday', '2', '10', 'premium'].map((id) => [
+              id,
+              { desc: id, ratio: 1, display_order: order.indexOf(id) },
+            ]),
+          ),
+        })
+      if (url.pathname === '/api/user/models') return Response.json({ success: true, data: [] })
+      throw new Error(`Unexpected endpoint ${url.pathname}`)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const children = authenticated ? (
+      <RememberedChat />
+    ) : (
+      <SessionProvider>
+        <CatalogProvider scope="chat">
+          <RememberedChat />
+        </CatalogProvider>
+      </SessionProvider>
+    )
+    const view = await renderApplication(children, authenticated, 'chat')
+    const user = userEvent.setup()
+    const picker = await screen.findByRole('combobox', { name: 'Service plan' })
+    await waitFor(() => expect(picker).toBeEnabled())
+    expect(picker).toHaveTextContent('everyday')
+    await user.click(picker)
+    expect(
+      (await screen.findAllByRole('option')).map((item) => item.textContent?.split(' · ')[0]),
+    ).toEqual(order)
+    await user.keyboard('{Escape}')
+    order = ['2', 'everyday', 'premium', '10']
+    await act(async () => {
+      await view.client.invalidateQueries({
+        queryKey: [authenticated ? 'service-groups' : 'catalog'],
+      })
+    })
+    expect(picker).toHaveTextContent('everyday')
+    await user.click(picker)
+    expect(
+      (await screen.findAllByRole('option')).map((item) => item.textContent?.split(' · ')[0]),
+    ).toEqual(order)
+    expect(screen.queryByRole('option', { name: /unauthorized/ })).not.toBeInTheDocument()
+    view.unmount()
+    view.client.clear()
+  },
+)

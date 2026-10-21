@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next'
 
 import { PublicLayout } from '@/components/layout'
 import { PageTransition } from '@/components/page-transition'
+import { orderedGroupEntries } from '@/lib/group-order'
 
 import {
   LoadingSkeleton,
@@ -99,9 +100,9 @@ export function Pricing() {
 
   const availableGroups = useMemo(
     () =>
-      Object.keys(usableGroup || {}).filter(
-        (g) => !EXCLUDED_GROUPS.includes(g)
-      ),
+      orderedGroupEntries(usableGroup || {})
+        .map(([group]) => group)
+        .filter((g) => !EXCLUDED_GROUPS.includes(g)),
     [usableGroup]
   )
 

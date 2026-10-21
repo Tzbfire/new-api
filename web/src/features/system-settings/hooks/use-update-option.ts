@@ -63,6 +63,18 @@ export function useUpdateOption() {
         // Always refresh system-options
         queryClient.invalidateQueries({ queryKey: ['system-options'] })
 
+        if (variables.key === 'group_setting.display_order') {
+          for (const queryKey of [
+            ['groups'],
+            ['user-groups'],
+            ['playground-groups'],
+            ['image-studio', 'groups'],
+            ['pricing'],
+          ]) {
+            queryClient.invalidateQueries({ queryKey })
+          }
+        }
+
         // If updating frontend-display-related config, also refresh status
         if (STATUS_RELATED_KEYS.has(variables.key)) {
           queryClient.invalidateQueries({ queryKey: ['status'] })

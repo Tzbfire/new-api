@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -528,4 +529,131 @@ func TestSetupLoginDoesNotTouchPasswordWhenPasswordFieldOmitted(t *testing.T) {
 	var stored model.User
 	require.NoError(t, db.First(&stored, user.Id).Error)
 	assert.Equal(t, hashedPassword, stored.Password)
+}
+
+func TestGroupDisplayOrderPreservesVisibilityAndRouting(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.AuditLog{}))
+
+	originalOrder := config.GlobalConfig.ExportAllConfigs()[setting.GroupDisplayOrderOptionKey]
+	originalOptions := common.OptionMap
+	originalRatios := ratio_setting.GroupRatio2JSONString()
+	originalUsable := setting.UserUsableGroups2JSONString()
+	originalAuto := setting.AutoGroups2JsonString()
+	originalSpecial := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.ReadAll()
+	common.OptionMap = map[string]string{}
+	ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Clear()
+	model.InvalidatePricingCache()
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{setting.GroupDisplayOrderOptionKey: originalOrder}))
+		common.OptionMap = originalOptions
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalUsable))
+		require.NoError(t, setting.UpdateAutoGroupsByJsonString(originalAuto))
+		ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Clear()
+		ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.AddAll(originalSpecial)
+		model.InvalidatePricingCache()
+	})
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":2,"new":3,"hidden":4}`))
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"auto":"Automatic","default":"Default","vip":"VIP","new":"New"}`))
+	require.NoError(t, setting.UpdateAutoGroupsByJsonString(`["default","vip"]`))
+	user := model.User{Username: "group-display-user", Group: "default", Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&user).Error)
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("id", user.Id) })
+	router.PUT("/api/option/", UpdateOption)
+	router.GET("/api/user/self/groups", GetUserGroups)
+	router.GET("/api/group", GetGroups)
+	router.GET("/api/pricing", GetPricing)
+
+	t.Run("save and expose permission filtered order", func(t *testing.T) {
+		body, err := common.Marshal(OptionUpdateRequest{Key: setting.GroupDisplayOrderOptionKey, Value: `["hidden","vip","auto","deleted","default"]`})
+		require.NoError(t, err)
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/api/option/", strings.NewReader(string(body))))
+		require.Equal(t, http.StatusOK, recorder.Code)
+		var saved struct{ Success bool }
+		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &saved))
+		require.True(t, saved.Success)
+		var stored model.Option
+		require.NoError(t, db.Where("key = ?", setting.GroupDisplayOrderOptionKey).First(&stored).Error)
+		assert.Equal(t, `["hidden","vip","auto","deleted","default"]`, stored.Value)
+
+		groups := httptest.NewRecorder()
+		router.ServeHTTP(groups, httptest.NewRequest(http.MethodGet, "/api/user/self/groups", nil))
+		var result struct {
+			Success    bool     `json:"success"`
+			GroupOrder []string `json:"group_order"`
+			Data       map[string]struct {
+				Ratio        any    `json:"ratio"`
+				Desc         string `json:"desc"`
+				DisplayOrder int    `json:"display_order"`
+			} `json:"data"`
+		}
+		require.NoError(t, common.Unmarshal(groups.Body.Bytes(), &result))
+		require.True(t, result.Success)
+		assert.Equal(t, []string{"vip", "auto", "default", "new"}, result.GroupOrder)
+		assert.NotContains(t, result.Data, "hidden")
+		assert.NotContains(t, result.Data, "deleted")
+		assert.Equal(t, float64(2), result.Data["vip"].Ratio)
+		assert.Equal(t, "VIP", result.Data["vip"].Desc)
+		for rank, name := range result.GroupOrder {
+			assert.Equal(t, rank, result.Data[name].DisplayOrder)
+		}
+
+		pricing := httptest.NewRecorder()
+		router.ServeHTTP(pricing, httptest.NewRequest(http.MethodGet, "/api/pricing", nil))
+		var prices struct {
+			Success     bool               `json:"success"`
+			GroupOrder  []string           `json:"group_order"`
+			GroupRatio  map[string]float64 `json:"group_ratio"`
+			UsableGroup map[string]string  `json:"usable_group"`
+			AutoGroups  []string           `json:"auto_groups"`
+		}
+		require.NoError(t, common.Unmarshal(pricing.Body.Bytes(), &prices))
+		require.True(t, prices.Success)
+		assert.Equal(t, result.GroupOrder, prices.GroupOrder)
+		assert.Equal(t, map[string]float64{"default": 1, "vip": 2, "new": 3}, prices.GroupRatio)
+		assert.NotContains(t, prices.UsableGroup, "hidden")
+		assert.Equal(t, []string{"default", "vip"}, prices.AutoGroups)
+		assert.Equal(t, []string{"default", "vip"}, service.GetUserAutoGroup("default"))
+
+		all := httptest.NewRecorder()
+		router.ServeHTTP(all, httptest.NewRequest(http.MethodGet, "/api/group", nil))
+		var allGroups struct {
+			Data []string `json:"data"`
+		}
+		require.NoError(t, common.Unmarshal(all.Body.Bytes(), &allGroups))
+		assert.Equal(t, []string{"hidden", "vip", "default", "new"}, allGroups.Data)
+	})
+
+	t.Run("reject malformed updates without replacing saved order", func(t *testing.T) {
+		for _, value := range []string{`null`, `{}`, `[1]`, `[null]`, `[""]`, `["vip","vip"]`, `[" vip"]`, `["vip\n"]`} {
+			t.Run(value, func(t *testing.T) {
+				body, err := common.Marshal(OptionUpdateRequest{Key: setting.GroupDisplayOrderOptionKey, Value: value})
+				require.NoError(t, err)
+				recorder := httptest.NewRecorder()
+				router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/api/option/", strings.NewReader(string(body))))
+				assert.Equal(t, http.StatusBadRequest, recorder.Code)
+				assert.Error(t, model.UpdateOption(setting.GroupDisplayOrderOptionKey, value))
+				assert.Error(t, model.UpdateOptionsBulk(map[string]string{setting.GroupDisplayOrderOptionKey: value}))
+				var stored model.Option
+				require.NoError(t, db.Where("key = ?", setting.GroupDisplayOrderOptionKey).First(&stored).Error)
+				assert.Equal(t, `["hidden","vip","auto","deleted","default"]`, stored.Value)
+				assert.Equal(t, []string{"vip", "default", "new"}, setting.OrderGroupNames([]string{"default", "new", "vip"}))
+			})
+		}
+	})
+
+	t.Run("reset and new groups have stable fallback", func(t *testing.T) {
+		require.NoError(t, model.UpdateOption(setting.GroupDisplayOrderOptionKey, `[]`))
+		all := httptest.NewRecorder()
+		router.ServeHTTP(all, httptest.NewRequest(http.MethodGet, "/api/group", nil))
+		var allGroups struct {
+			Data []string `json:"data"`
+		}
+		require.NoError(t, common.Unmarshal(all.Body.Bytes(), &allGroups))
+		assert.Equal(t, []string{"default", "hidden", "new", "vip"}, allGroups.Data)
+		assert.Equal(t, []string{"default", "vip"}, service.GetUserAutoGroup("default"))
+	})
 }

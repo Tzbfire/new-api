@@ -244,6 +244,9 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == setting.GroupDisplayOrderOptionKey {
+		return setting.ValidateGroupDisplayOrder(value)
+	}
 	if key == "oauth.trusted_origins" {
 		_, err := system_setting.NormalizeOAuthTrustedOrigins(value)
 		return err

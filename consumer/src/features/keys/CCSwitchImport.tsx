@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Button, ErrorState, Field, Input, LoadingState, Modal, Select } from '@/components/ui'
 import { SearchSelect } from '@/components/search-select'
+import { supportsKind } from '@/components/service-picker'
 import { request } from '@/lib/api'
 import { useCatalog } from '@/lib/catalog'
 import { useStatus } from '@/lib/status'
@@ -47,24 +48,22 @@ export function CCSwitchImport(props: { apiKey: APIKey; onClose: () => void }) {
       .map((value) => value.trim())
       .filter(Boolean),
   )
-  const endpoint = { claude: 'anthropic', gemini: 'gemini', codex: 'openai-response' }[app]
   const options = catalog.allModels.filter(
     (item) =>
       models.data?.includes(item.model_name) &&
-      !item.supported_endpoint_types.includes('image-generation') &&
-      !/^(?:gpt-image(?:-|$)|dall-e(?:-|$))/i.test(item.model_name) &&
-      item.supported_endpoint_types.includes(endpoint) &&
+      supportsKind(item, 'text') &&
       (!props.apiKey.model_limits_enabled || restricted.has(item.model_name)),
   )
   const selectedModel = options.some((item) => item.model_name === model) ? model : ''
-  const loadingModels = models.isPending || catalog.isPending
+  const loadingModels = models.isPending || catalog.metadataPending
+  const modelError = models.error || catalog.metadataError
   const ready = Boolean(
     address &&
     selectedModel &&
     connectionName.trim() &&
     !site.error &&
-    !models.error &&
-    !catalog.error,
+    !loadingModels &&
+    !modelError,
   )
   const locked = loadingKey || !!secret
   function close() {
@@ -101,10 +100,7 @@ export function CCSwitchImport(props: { apiKey: APIKey; onClose: () => void }) {
           <Select
             value={app}
             disabled={locked}
-            onValueChange={(value) => {
-              setApp(value as CCSwitchApp)
-              setModel('')
-            }}
+            onValueChange={(value) => setApp(value as CCSwitchApp)}
             options={[
               { value: 'codex', label: 'Codex' },
               { value: 'claude', label: 'Claude Code' },
@@ -132,7 +128,7 @@ export function CCSwitchImport(props: { apiKey: APIKey; onClose: () => void }) {
           label={t('Model')}
           value={selectedModel}
           onValueChange={setModel}
-          disabled={locked || loadingModels || !options.length}
+          disabled={locked || loadingModels || !!modelError || !options.length}
           options={options.map((item) => ({ value: item.model_name, label: item.model_name }))}
         />
         {group === 'auto' && (
@@ -141,16 +137,14 @@ export function CCSwitchImport(props: { apiKey: APIKey; onClose: () => void }) {
           </p>
         )}
         {group !== 'auto' && loadingModels && <LoadingState />}
-        {group !== 'auto' && !loadingModels && !options.length && (
-          <p role="status">
-            {t(
-              'This key has no model with the selected app’s native API. Choose another app or key.',
-            )}
-          </p>
+        {group !== 'auto' && !loadingModels && !modelError && !options.length && (
+          <p role="status">{t('No text models are available to this key in this group.')}</p>
         )}
         {models.error && <ErrorState error={models.error} retry={() => void models.refetch()} />}
         {error ? <ErrorState error={error} /> : null}
-        {catalog.error ? <ErrorState error={catalog.error} retry={catalog.refetch} /> : null}
+        {catalog.metadataError ? (
+          <ErrorState error={catalog.metadataError} retry={catalog.refetch} />
+        ) : null}
         {site.error ? <ErrorState error={site.error} retry={() => void site.refetch()} /> : null}
         <p className="field-hint">
           {t(

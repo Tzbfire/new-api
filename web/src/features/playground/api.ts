@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { orderedGroupEntries } from '@/lib/group-order'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { API_ENDPOINTS } from './constants'
@@ -75,11 +76,11 @@ export async function getUserGroups(): Promise<GroupOption[]> {
 
   const groupData = data.data as Record<
     string,
-    { desc: string; ratio: number | string }
+    { desc: string; ratio: number | string; display_order?: number }
   >
 
   // label is for button display (name only); desc is for dropdown content
-  return Object.entries(groupData).map(([group, info]) => ({
+  return orderedGroupEntries(groupData).map(([group, info]) => ({
     label: group,
     value: group,
     ratio: info.ratio,

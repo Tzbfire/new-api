@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"maps"
 	"net/http"
+	"slices"
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -12,10 +14,7 @@ import (
 )
 
 func GetGroups(c *gin.Context) {
-	groupNames := make([]string, 0)
-	for groupName := range ratio_setting.GetGroupRatioCopy() {
-		groupNames = append(groupNames, groupName)
-	}
+	groupNames := setting.OrderGroupNames(slices.Collect(maps.Keys(ratio_setting.GetGroupRatioCopy())))
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -29,7 +28,7 @@ func GetUserGroups(c *gin.Context) {
 	userId := c.GetInt("id")
 	userGroup, _ = model.GetUserGroup(userId, false)
 	userUsableGroups := service.GetUserUsableGroups(userGroup)
-	for groupName, _ := range ratio_setting.GetGroupRatioCopy() {
+	for groupName := range ratio_setting.GetGroupRatioCopy() {
 		// UserUsableGroups contains the groups that the user can use
 		if desc, ok := userUsableGroups[groupName]; ok {
 			usableGroups[groupName] = map[string]any{
@@ -44,9 +43,14 @@ func GetUserGroups(c *gin.Context) {
 			"desc":  setting.GetUsableGroupDescription("auto"),
 		}
 	}
+	groupOrder := setting.OrderGroupNames(slices.Collect(maps.Keys(usableGroups)))
+	for rank, groupName := range groupOrder {
+		usableGroups[groupName]["display_order"] = rank
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    usableGroups,
+		"success":     true,
+		"message":     "",
+		"data":        usableGroups,
+		"group_order": groupOrder,
 	})
 }

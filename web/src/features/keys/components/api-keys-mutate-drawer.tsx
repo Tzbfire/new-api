@@ -66,6 +66,7 @@ import { RelatedPolicyLink } from '@/features/system-settings/request-policies/r
 import { useStatus } from '@/hooks/use-status'
 import { getUserModels, getUserGroups } from '@/lib/api'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
+import { orderedGroupEntries } from '@/lib/group-order'
 import { handleServerError } from '@/lib/handle-server-error'
 import {
   requireServerSuccess,
@@ -164,7 +165,7 @@ export function ApiKeysMutateDrawer({
   const models = modelsData?.data || []
   const groups = useMemo<ApiKeyGroupOption[]>(
     () =>
-      Object.entries(groupsData?.data || {}).map(([key, info]) => ({
+      orderedGroupEntries(groupsData?.data || {}).map(([key, info]) => ({
         value: key,
         label: key,
         desc: info.desc ? translateServerText(t, info.desc) : key,

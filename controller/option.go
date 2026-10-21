@@ -230,6 +230,11 @@ func UpdateOption(c *gin.Context) {
 		option.Value = fmt.Sprintf("%v", option.Value)
 	}
 	switch option.Key {
+	case setting.GroupDisplayOrderOptionKey:
+		if err := setting.ValidateGroupDisplayOrder(option.Value.(string)); err != nil {
+			common.ApiErrorStatus(c, http.StatusBadRequest, common.NewMessage("Invalid parameters"))
+			return
+		}
 	case "oauth.trusted_origins":
 		normalized, err := system_setting.NormalizeOAuthTrustedOrigins(option.Value.(string))
 		if err != nil {

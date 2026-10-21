@@ -63,6 +63,8 @@ bun run build
 
 聊天 `/pg/chat/completions`、画室 `/pg/image-studio/*` 与 `/api/image-studio/*`、JWT/刷新会话、分组模型、API Key、计费、支付和套餐主要复用该基线已有接口。画室和新版会话本来就属于该基线，不能将它们误算为此次新增，也不能据此假设更早的后端已有这些能力。管理员配置的 API 地址复用 `/api/status` 中的 `api_info`，CC Switch 导入链接由前端生成，没有新增专用后端接口。
 
+套餐购前预览使用登录态只读接口 `GET /api/subscription/plans/:id/pricing?group=...` 及其 `/quote` 子路径。服务器只公开已启用套餐范围内的模型，报价复用现有计价引擎，并采用套餐生效后的账户分组倍率。`allowed_token_groups` 仅限定抵扣范围；是否获得分组权限取决于 `upgrade_group` 和现有分组规则，预览会明确返回这个区别。浏览预览不会修改账户、密钥或聊天权限，普通模型及报价接口仍按当前权限校验。
+
 ### 多域名登录与 API 接入地址
 
 后台「身份验证 → OAuth 集成」中的「OAuth 可信来源」对应 `oauth.trusted_origins`，可按行或用逗号填写多个 HTTPS 源，例如 `https://app.example.com`、`https://app.example.net`。只允许精确的协议、域名和端口，不支持通配符、路径、凭证或查询参数。主站 `ServerAddress` 及安全 Cookie 环境配置中已有的可信源仍然有效；清空新增设置不会撤销这些原有配置。
@@ -118,6 +120,8 @@ NEW_API_TEST_BINARY="$PWD/.local-tests/factory-consumer/new-api" node consumer/t
 脚本从 `.env` 读取连接配置，在同一实例创建随机命名的 `factory_consumer_test_*` 空库，跑完真实网关联调后删除自己的测试库；不会对原有 `new-api` 业务库执行初始化或注入模拟余额。需要本机 `psql` 和创建数据库权限。直接调用底层集成脚本时，`NEW_API_TEST_POSTGRES_DSN` 也只接受上述命名且无业务表的本地测试库。已有业务库的正常运行、备份及升级应与这种破坏性测试分开执行。
 
 ## 维护约定
+
+后台「计费与支付 → 分组定价 → 分组显示顺序」可拖拽或用上下按钮调整用户选择分组时的顺序，保存到 `group_setting.display_order`。新旧前端共同读取服务端返回的 `group_order` / `display_order`，不依赖 JSON 对象的键顺序（包括数字名称）。只有用户原本有权限的分组才会出现；新增且未排序的分组按名称追加，已删除的配置项忽略。恢复默认顺序会保存空数组。此配置不改变分组倍率、可见权限、用户已选分组或 `AutoGroups` 的路由尝试顺序。
 
 - 功能目录为业务边界，公共交互统一复用 `src/components`，不跨项目导入旧页面或样式。
 - access token、proof、API Key、OTP 和恢复码只存在内存；聊天记录按用户 ID 保存在本机，有明确 UI 提示。

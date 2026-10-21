@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { orderedGroupEntries } from '@/lib/group-order'
 
 import type { PricingData } from './types'
 
@@ -27,5 +28,26 @@ import type { PricingData } from './types'
 // Get model pricing data
 export async function getPricing(): Promise<PricingData> {
   const res = await api.get('/api/pricing')
-  return res.data
+  const data: Omit<PricingData, 'usable_group'> & {
+    usable_group: Record<string, string | PricingData['usable_group'][string]>
+  } = res.data
+  const usableGroups = Object.fromEntries(
+    Object.entries(data.usable_group ?? {}).map(([group, info]) => [
+      group,
+      typeof info === 'string'
+        ? { desc: info, ratio: data.group_ratio?.[group] ?? 1 }
+        : info,
+    ])
+  )
+  return {
+    ...data,
+    usable_group: Object.fromEntries(
+      orderedGroupEntries(usableGroups, data.group_order).map(
+        ([group, info], displayOrder) => [
+          group,
+          { ...info, display_order: displayOrder },
+        ]
+      )
+    ),
+  }
 }

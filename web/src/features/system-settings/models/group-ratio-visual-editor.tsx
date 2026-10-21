@@ -83,12 +83,14 @@ import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
 
 import { safeJsonParse } from '../utils/json-parser'
+import { GroupDisplayOrderEditor } from './group-display-order-editor'
 import { GroupSpecialUsableRulesEditor } from './group-special-usable-editor'
 
 export type GroupSettingsSection =
   | 'pricing'
   | 'overrides'
   | 'visibility'
+  | 'display'
   | 'auto'
 
 type GroupRatioVisualEditorProps = {
@@ -100,6 +102,7 @@ type GroupRatioVisualEditorProps = {
   userUsableGroups: string
   groupGroupRatio: string
   autoGroups: string
+  groupDisplayOrder?: string
   maxTokenAutoGroupsField: ReactNode
   groupSpecialUsableGroup: string
   onChange: (field: string, value: string) => void
@@ -275,6 +278,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
   userUsableGroups,
   groupGroupRatio,
   autoGroups,
+  groupDisplayOrder = '[]',
   maxTokenAutoGroupsField,
   groupSpecialUsableGroup,
   onChange,
@@ -360,6 +364,9 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
           <TabsTrigger value='visibility' className='px-3'>
             {t('Group visibility')}
           </TabsTrigger>
+          <TabsTrigger value='display' className='px-3'>
+            {t('Group display order')}
+          </TabsTrigger>
           <TabsTrigger value='auto' className='px-3'>
             {t('Auto group order')}
           </TabsTrigger>
@@ -386,6 +393,14 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
           value={groupSpecialUsableGroup}
           groupOptions={registryNames}
           onChange={(value) => onChange('GroupSpecialUsableGroup', value)}
+        />
+      </TabsContent>
+      <TabsContent value='display'>
+        <GroupDisplayOrderEditor
+          value={groupDisplayOrder}
+          groupNames={registryNames}
+          descriptions={parseUsableMap(userUsableGroups)}
+          onChange={(value) => onChange('GroupDisplayOrder', value)}
         />
       </TabsContent>
       <TabsContent value='auto' keepMounted>

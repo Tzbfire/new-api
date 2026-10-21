@@ -9,7 +9,10 @@ import { useSession } from '@/lib/session'
 import { Button, EmptyState } from './ui'
 import { SearchSelect } from './search-select'
 
-export function supportsKind(model: PricingModel, kind: 'chat' | 'image' | 'all'): boolean {
+export function supportsKind(
+  model: PricingModel,
+  kind: 'chat' | 'text' | 'image' | 'all',
+): boolean {
   if (kind === 'all') return true
   const endpoints = model.supported_endpoint_types || []
   if (kind === 'image') return endpoints.includes('image-generation')
@@ -19,7 +22,12 @@ export function supportsKind(model: PricingModel, kind: 'chat' | 'image' | 'all'
     /(?:^|[/:])(?:gpt-image(?:-|$)|dall-e(?:-|$))/i.test(model.model_name)
   )
     return false
-  return endpoints.some((e) => ['openai', 'anthropic', 'gemini'].includes(e))
+  // External text clients can use Responses-only models; the chat page still
+  // requires one of the formats supported by its chat-completions transport.
+  return endpoints.some(
+    (e) =>
+      ['openai', 'anthropic', 'gemini'].includes(e) || (kind === 'text' && e === 'openai-response'),
+  )
 }
 export function ServicePicker(props: {
   kind?: 'chat' | 'image' | 'all'

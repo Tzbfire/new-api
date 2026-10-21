@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { orderedGroupEntries } from '@/lib/group-order'
+
 import { EXCLUDED_GROUPS, FILTER_ALL, QUOTA_TYPE_VALUES } from '../constants'
 import type { PricingModel } from '../types'
 
@@ -34,7 +36,8 @@ export function getAvailableGroups(
     ? model.enable_groups
     : []
 
-  return Object.keys(usableGroup)
+  return orderedGroupEntries(usableGroup)
+    .map(([group]) => group)
     .filter((g) => !EXCLUDED_GROUPS.includes(g))
     .filter((g) => modelEnableGroups.includes(g))
 }

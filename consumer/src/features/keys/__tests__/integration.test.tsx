@@ -9,6 +9,13 @@ import { apiAddresses, ccSwitchLink, protocolBaseURL } from '../api-addresses'
 import { CCSwitchImport } from '../CCSwitchImport'
 import type { APIKey } from '../types'
 
+const catalogState = vi.hoisted(() => ({
+  metadataPending: false,
+  metadataError: null as Error | null,
+  isPending: false,
+  error: null as Error | null,
+}))
+
 vi.mock('@/lib/session', () => ({ useSession: () => ({ user: { id: 31, group: 'default' } }) }))
 vi.mock('@/lib/status', () => ({
   useStatus: () => ({
@@ -29,14 +36,30 @@ vi.mock('@/lib/catalog', () => ({
       { model_name: 'responses-only', supported_endpoint_types: ['openai-response'] },
       { model_name: 'restricted-model', supported_endpoint_types: ['openai-response'] },
       { model_name: 'gpt-image-2', supported_endpoint_types: ['openai-response'] },
+      { model_name: 'chat-only', supported_endpoint_types: ['openai'] },
+      { model_name: 'claude-text', supported_endpoint_types: ['anthropic'] },
+      { model_name: 'gemini-text', supported_endpoint_types: ['gemini'] },
+      { model_name: 'another-group', supported_endpoint_types: ['openai'] },
+      { model_name: 'image-only', supported_endpoint_types: ['image-generation'] },
+      { model_name: 'alias/gpt-image-2', supported_endpoint_types: ['openai'] },
+      { model_name: 'embedding', supported_endpoint_types: ['embeddings'] },
+      { model_name: 'rerank', supported_endpoint_types: ['rerank'] },
+      { model_name: 'audio-only', supported_endpoint_types: ['audio'] },
+      { model_name: 'task-only', supported_endpoint_types: ['task'] },
     ],
-    isPending: false,
+    ...catalogState,
   }),
 }))
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
   localStorage.clear()
+  Object.assign(catalogState, {
+    metadataPending: false,
+    metadataError: null,
+    isPending: false,
+    error: null,
+  })
 })
 
 it('uses administrator addresses safely and preserves protocol prefixes', () => {
@@ -156,3 +179,104 @@ it('offers Responses-only models, honors key restrictions and reveals only for a
   expect(await screen.findByRole('button', { name: 'Prepare import' })).toBeVisible()
   client.clear()
 })
+
+it('offers every permitted text model and keeps the choice when switching target apps', async () => {
+  // The key belongs to premium; a different group selected elsewhere must not block it.
+  catalogState.isPending = true
+  catalogState.error = new Error('Another selected group is unavailable')
+  const names = [
+    'chat-only',
+    'claude-text',
+    'gemini-text',
+    'responses-only',
+    'gpt-image-2',
+    'alias/gpt-image-2',
+    'image-only',
+    'embedding',
+    'rerank',
+    'audio-only',
+    'task-only',
+  ]
+  const fetcher = vi.fn(async (path: string) => {
+    if (path === '/api/user/models?group=premium')
+      return Response.json({ success: true, data: names })
+    throw new Error(`Unexpected ${path}`)
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const language = createInstance()
+  await language.init({ lng: 'en', resources: { en: { translation: {} } } })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const key = {
+    id: 4,
+    group: 'premium',
+    name: 'Desktop',
+    model_limits_enabled: false,
+    model_limits: 'responses-only',
+  } as APIKey
+  render(
+    <I18nextProvider i18n={language}>
+      <QueryClientProvider client={client}>
+        <CCSwitchImport apiKey={key} onClose={() => {}} />
+      </QueryClientProvider>
+    </I18nextProvider>,
+  )
+  const user = userEvent.setup()
+  const picker = screen.getByRole('combobox', { name: 'Model' })
+  await waitFor(() => expect(picker).toBeEnabled())
+  for (const app of ['Codex', 'Claude Code', 'Gemini CLI']) {
+    if (app !== 'Codex') {
+      await user.click(screen.getByRole('combobox', { name: 'Application' }))
+      await user.click(await screen.findByRole('option', { name: app }))
+      expect(picker).toHaveTextContent('chat-only')
+    }
+    await user.click(picker)
+    expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(
+      expect.arrayContaining(['chat-only', 'claude-text', 'gemini-text', 'responses-only']),
+    )
+    expect(screen.getAllByRole('option')).toHaveLength(4)
+    await user.click(screen.getByRole('option', { name: 'chat-only' }))
+    expect(screen.getByRole('button', { name: 'Prepare import' })).toBeEnabled()
+  }
+  expect(fetcher.mock.calls).toEqual([['/api/user/models?group=premium', expect.anything()]])
+  client.clear()
+})
+
+it.each([false, true])(
+  'distinguishes an empty model list from a failed group request (failure: %s)',
+  async (failure) => {
+    const fetcher = vi.fn(async () =>
+      failure
+        ? Response.json({ success: false, message: 'Group models unavailable' }, { status: 503 })
+        : Response.json({ success: true, data: [] }),
+    )
+    vi.stubGlobal('fetch', fetcher)
+    const language = createInstance()
+    await language.init({ lng: 'en', resources: { en: { translation: {} } } })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <I18nextProvider i18n={language}>
+        <QueryClientProvider client={client}>
+          <CCSwitchImport
+            apiKey={
+              { id: 4, group: 'premium', name: 'Desktop', model_limits_enabled: false } as APIKey
+            }
+            onClose={() => {}}
+          />
+        </QueryClientProvider>
+      </I18nextProvider>,
+    )
+    if (failure) {
+      expect(await screen.findByText('Group models unavailable')).toBeVisible()
+      expect(
+        screen.queryByText('No text models are available to this key in this group.'),
+      ).not.toBeInTheDocument()
+    } else
+      expect(
+        await screen.findByText('No text models are available to this key in this group.'),
+      ).toBeVisible()
+    expect(screen.getByRole('combobox', { name: 'Model' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Prepare import' })).toBeDisabled()
+    expect(fetcher).toHaveBeenCalledOnce()
+    client.clear()
+  },
+)

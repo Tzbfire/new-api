@@ -71,6 +71,7 @@ type GroupFormValues = {
   UserUsableGroups: string
   GroupGroupRatio: string
   AutoGroups: string
+  GroupDisplayOrder: string
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
   GroupSpecialUsableGroup: string
@@ -152,6 +153,11 @@ export const GroupRatioForm = memo(function GroupRatioForm({
             type='button'
             size='sm'
             onClick={form.handleSubmit(onSave, (errors) => {
+              if (errors.GroupDisplayOrder) {
+                setEditMode('json')
+                requestAnimationFrame(() => form.setFocus('GroupDisplayOrder'))
+                return
+              }
               if (errors.MaxTokenAutoGroups) {
                 setEditMode('visual')
                 setSection('auto')
@@ -172,6 +178,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
             userUsableGroups={values.UserUsableGroups ?? ''}
             groupGroupRatio={values.GroupGroupRatio ?? ''}
             autoGroups={values.AutoGroups ?? ''}
+            groupDisplayOrder={values.GroupDisplayOrder ?? '[]'}
             maxTokenAutoGroupsField={
               <FormField
                 control={form.control}
@@ -329,6 +336,32 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                     {`{ targetGroup: ratio }`}{' '}
                     {t(
                       'to override billing when a user in one group uses a token of another group.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='GroupDisplayOrder'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Group display order')}</FormLabel>
+                  <FormControl>
+                    <JsonCodeEditor
+                      value={field.value}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
+                      heightClassName='h-40 min-h-40 max-h-40'
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'JSON array of group identifiers in display order. Unlisted groups follow in name order.'
                     )}
                   </FormDescription>
                   <FormMessage />
