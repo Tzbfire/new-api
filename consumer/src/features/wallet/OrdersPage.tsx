@@ -12,6 +12,7 @@ import {
   PageHeader,
 } from '@/components/ui'
 import { request } from '@/lib/api'
+import { toIntlLocale } from '@/i18n/languages'
 import { useSession } from '@/lib/session'
 import { Pagination } from '@/components/pagination'
 import { formatDate, formatNumber } from '@/lib/format'
@@ -34,17 +35,18 @@ interface OrderPage {
 export default function OrdersPage() {
   const { t, i18n } = useTranslation()
   const { user } = useSession()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(15)
   const [search, setSearch] = useState('')
   const [keyword, setKeyword] = useState('')
   const orders = useQuery<OrderPage>({
-    queryKey: ['topup-orders', user?.id, keyword, page, pageSize],
+    queryKey: ['topup-orders', user?.id, keyword, page, pageSize, 'success'],
     placeholderData: (previous, query) =>
       query?.queryKey[1] === user?.id && query?.queryKey[2] === keyword ? previous : undefined,
     queryFn: () =>
       request<OrderPage>(
-        `/api/user/topup/self?p=${page}&page_size=${pageSize}&keyword=${encodeURIComponent(keyword)}`,
+        `/api/user/topup/self?p=${page}&page_size=${pageSize}&status=success&keyword=${encodeURIComponent(keyword)}`,
       ),
   })
   return (
@@ -53,7 +55,7 @@ export default function OrdersPage() {
       <PageHeader
         eyebrow={t('YOUR RECORDS')}
         title={t('Payment records')}
-        description={t('Payment status is confirmed by the server.')}
+        description={t('Only completed payments are shown.')}
         actions={
           <Button
             variant="secondary"
@@ -99,7 +101,9 @@ export default function OrdersPage() {
         <EmptyState
           title={keyword ? t('No matching payments') : t('No payment records yet')}
           description={
-            keyword ? t('Try another order number.') : t('Your payment history will appear here.')
+            keyword
+              ? t('Try another order number.')
+              : t('Your completed payments will appear here.')
           }
         />
       )}
@@ -121,9 +125,9 @@ export default function OrdersPage() {
                   <td>
                     <code>{order.trade_no}</code>
                   </td>
-                  <td>{formatDate(order.create_time, i18n.language)}</td>
+                  <td>{formatDate(order.create_time, locale)}</td>
                   <td>{order.payment_method}</td>
-                  <td>{formatNumber(order.money, i18n.language)}</td>
+                  <td>{formatNumber(order.money, locale)}</td>
                   <td>
                     <Badge>{t(order.status)}</Badge>
                   </td>

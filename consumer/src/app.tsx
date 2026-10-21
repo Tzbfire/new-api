@@ -96,7 +96,15 @@ const root = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   component: Root,
   validateSearch: (
     search: Record<string, unknown>,
-  ): { group?: string; model?: string; batch?: string; request_id?: string; from?: number } => ({
+  ): {
+    group?: string
+    model?: string
+    batch?: string
+    request_id?: string
+    from?: number
+    token_id?: number
+    token_label?: string
+  } => ({
     group: typeof search.group === 'string' && search.group.length < 128 ? search.group : undefined,
     model: typeof search.model === 'string' && search.model.length < 256 ? search.model : undefined,
     batch: typeof search.batch === 'string' && search.batch.length < 128 ? search.batch : undefined,
@@ -107,6 +115,14 @@ const root = createRootRouteWithContext<{ queryClient: QueryClient }>()({
     from:
       Number.isSafeInteger(Number(search.from)) && Number(search.from) > 0
         ? Number(search.from)
+        : undefined,
+    token_id:
+      Number.isSafeInteger(Number(search.token_id)) && Number(search.token_id) > 0
+        ? Number(search.token_id)
+        : undefined,
+    token_label:
+      typeof search.token_label === 'string' && search.token_label.length <= 128
+        ? search.token_label
         : undefined,
   }),
   notFoundComponent: NotFound,
@@ -230,12 +246,19 @@ const keys = createRoute({
 const UsagePage = lazy(() => import('@/features/usage/UsagePage'))
 function UsageRoute() {
   const location = useLocation()
-  const search = location.search as { request_id?: string; from?: number }
+  const search = location.search as {
+    request_id?: string
+    from?: number
+    token_id?: number
+    token_label?: string
+  }
   return (
     <UsagePage
-      key={`${search.request_id || ''}:${search.from || ''}`}
+      key={`${search.request_id || ''}:${search.from || ''}:${search.token_id || ''}`}
       initialRequestId={search.request_id}
       initialFrom={search.from}
+      initialTokenId={search.token_id}
+      initialTokenName={search.token_label}
     />
   )
 }

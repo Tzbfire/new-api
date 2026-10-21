@@ -8,6 +8,7 @@ import { clearAuth } from '@/lib/auth-state'
 import { CatalogProvider } from '@/lib/catalog'
 import { SessionProvider } from '@/lib/session'
 import UsagePage from '../UsagePage'
+import type { UsageLog } from '../UsagePage'
 
 beforeEach(() => {
   clearAuth()
@@ -20,6 +21,8 @@ async function renderUsage(
   initialFrom?: number,
   pendingPage?: Promise<void>,
   pendingSummary?: Promise<void>,
+  record?: Partial<UsageLog>,
+  initialKey?: { id: number; name: string },
 ) {
   const fetch = vi.fn(async (path: string) => {
     const url = new URL(path, 'http://localhost')
@@ -80,6 +83,7 @@ async function renderUsage(
               admin_info: { channel_name: 'HIDDEN_CHANNEL', secret: 'HIDDEN_ADMIN' },
               root_info: { secret: 'HIDDEN_ROOT' },
             }),
+            ...record,
           },
         ],
       }
@@ -102,7 +106,12 @@ async function renderUsage(
       <QueryClientProvider client={client}>
         <SessionProvider>
           <CatalogProvider>
-            <UsagePage initialRequestId={initialRequestId} initialFrom={initialFrom} />
+            <UsagePage
+              initialRequestId={initialRequestId}
+              initialFrom={initialFrom}
+              initialTokenId={initialKey?.id}
+              initialTokenName={initialKey?.name}
+            />
           </CatalogProvider>
         </SessionProvider>
       </QueryClientProvider>
@@ -191,6 +200,36 @@ it('shows public cache and billing details without exposing privileged metadata'
   expect(cacheWrite).toHaveTextContent('120')
 })
 
+it.each([3, undefined])(
+  'shows recorded image quantity %s consistently in the list and detail without text-only metrics',
+  async (count) => {
+    await renderUsage(undefined, undefined, undefined, undefined, {
+      model_name: 'fixture-image',
+      prompt_tokens: 1,
+      completion_tokens: 0,
+      is_stream: false,
+      other: JSON.stringify({
+        request_path: '/v1/images/generations',
+        model_price: 0.5,
+        content_parts:
+          count === undefined ? [] : [{ key: 'Image count {{count}}', params: { count } }],
+      }),
+    })
+    await screen.findByText('fixture-image')
+    const row = screen.getByRole('row', { name: /fixture-image/ })
+    const expected = count === undefined ? 'Image count not recorded' : '3 images'
+    expect(row).toHaveTextContent(expected)
+    expect(row).toHaveTextContent('Total duration: 4 sec')
+    expect(row).not.toHaveTextContent('Average output speed')
+    await userEvent.setup().click(within(row).getByRole('button', { name: 'View' }))
+    const dialog = screen.getByRole('dialog', { name: 'Request details' })
+    expect(dialog).toHaveTextContent(expected)
+    expect(dialog).not.toHaveTextContent('First response latency')
+    expect(dialog).not.toHaveTextContent('Average output speed')
+    expect(dialog).toHaveTextContent('Total duration4 sec')
+  },
+)
+
 it('rejects a reversed custom time range without querying it and resets record filters', async () => {
   const fetch = await renderUsage()
   const user = userEvent.setup()
@@ -254,6 +293,9 @@ it('shows scoped cache totals and distinct streamed throughput, first-response a
   expect(screen.getByText('Cache usage on this page')).toBeVisible()
   expect(screen.getByText(/Cache counts cover this page only/)).toBeVisible()
   expect(screen.getByText('Average output speed: 50 token/s')).toBeVisible()
+  expect(screen.getByRole('table')).toHaveTextContent(
+    'First response latency: 1 sec · Total duration: 4 sec',
+  )
   expect(screen.getByText('40%')).toBeVisible()
   expect(screen.getByText('Cache read tokens: 400 · 40%')).toBeVisible()
   expect(screen.getByRole('progressbar', { name: 'Cache read share' })).toHaveAttribute(
@@ -265,6 +307,68 @@ it('shows scoped cache totals and distinct streamed throughput, first-response a
   expect(dialog).toHaveTextContent('Total duration4 sec')
   expect(dialog).toHaveTextContent('First response latency1 sec')
   expect(dialog).toHaveTextContent('Average output speed50 token/s')
+})
+
+it('opens a key-specific history with precise identity, matching spending and all request types', async () => {
+  const fetch = await renderUsage(
+    undefined,
+    undefined,
+    Promise.resolve(),
+    Promise.resolve(),
+    undefined,
+    { id: 11, name: 'Shared name' },
+  )
+  await screen.findByText('fixture-chat')
+  expect(screen.getByRole('region', { name: 'Applied filters' })).toHaveTextContent(
+    'Shared name (#11)',
+  )
+  expect(screen.queryByTestId('usage-chart-shell')).not.toBeInTheDocument()
+  const reads = fetch.mock.calls.map(([path]) => new URL(path, 'http://localhost'))
+  const records = reads.find((url) => url.pathname === '/api/log/self')!
+  const stats = reads.find((url) => url.pathname === '/api/log/self/stat')!
+  expect(records.searchParams.get('token_id')).toBe('11')
+  expect(records.searchParams.get('type')).toBe('0')
+  expect(records.searchParams.get('token_name')).toBe('')
+  expect(stats.searchParams.get('token_id')).toBe('11')
+  expect(stats.searchParams.get('type')).toBe('2')
+  expect(reads.some((url) => url.pathname === '/api/data/self')).toBe(false)
+  const user = userEvent.setup()
+  await user.click(screen.getByRole('button', { name: 'Next page' }))
+  await waitFor(() =>
+    expect(
+      fetch.mock.calls.some(([path]) => {
+        const url = new URL(path, 'http://localhost')
+        return (
+          url.pathname === '/api/log/self' &&
+          url.searchParams.get('p') === '2' &&
+          url.searchParams.get('token_id') === '11'
+        )
+      }),
+    ).toBe(true),
+  )
+  await user.click(screen.getByRole('button', { name: 'All API keys' }))
+  await waitFor(() => expect(screen.queryByText('Shared name (#11)')).not.toBeInTheDocument())
+  await waitFor(() =>
+    expect(
+      fetch.mock.calls.some(([path]) => {
+        const url = new URL(path, 'http://localhost')
+        return (
+          url.pathname === '/api/log/self' &&
+          url.searchParams.get('p') === '1' &&
+          !url.searchParams.has('token_id')
+        )
+      }),
+    ).toBe(true),
+  )
+  expect(screen.getByTestId('usage-chart-shell')).toBeVisible()
+})
+
+it('shows missing text timings explicitly instead of inventing a first response or total duration', async () => {
+  await renderUsage(undefined, undefined, undefined, undefined, { use_time: 0, other: '{}' })
+  await screen.findByText('fixture-chat')
+  expect(screen.getByRole('table')).toHaveTextContent(
+    'First response latency: Not recorded · Total duration: Not recorded',
+  )
 })
 
 it('retains the table and paging controls while the next page loads and prevents stale record actions', async () => {

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { KeyRound, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -235,6 +236,16 @@ export default function KeysPage() {
               </div>
               <KeyQuota apiKey={key} />
               <div className="row key-actions">
+                <Link
+                  to="/usage"
+                  search={{ token_id: key.id, token_label: key.name || undefined }}
+                  className="button button-secondary"
+                  aria-label={t('View usage records for {{name}}', {
+                    name: key.name || t('Untitled key'),
+                  })}
+                >
+                  {t('View usage records')}
+                </Link>
                 <Button
                   variant="secondary"
                   disabled={keys.isPlaceholderData}

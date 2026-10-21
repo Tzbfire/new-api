@@ -75,10 +75,11 @@ export function RequestDetails(props: { log: UsageLog }) {
           </p>
         </section>
       ) : (
-        <p>
-          {t('Images')}:{' '}
-          {metric.count === undefined ? t('Not recorded') : formatNumber(metric.count, locale)}
-        </p>
+        <strong>
+          {metric.count === undefined
+            ? t('Image count not recorded')
+            : t('{{count}} images', { count: formatNumber(metric.count, locale) })}
+        </strong>
       )}
       <section aria-label={t('Response performance')}>
         <dl className="request-timing-grid">
@@ -91,29 +92,35 @@ export function RequestDetails(props: { log: UsageLog }) {
               )}
             </dd>
           </div>
-          <div>
-            <dt>{t('First response latency')}</dt>
-            <dd>
-              {formatDurationMilliseconds(
-                timing.firstResponse === undefined ? undefined : timing.firstResponse * 1000,
-                locale,
-              )}
-            </dd>
-          </div>
-          <div>
-            <dt>{t('Average output speed')}</dt>
-            <dd>
-              {timing.tokensPerSecond === undefined
-                ? '—'
-                : `${formatNumber(timing.tokensPerSecond, locale, { maximumFractionDigits: 2 })} token/s`}
-            </dd>
-          </div>
-        </dl>
-        <p className="muted usage-filter-help">
-          {t(
-            'Speed includes waiting time; only streamed text with recorded output and duration is measured.',
+          {metric.kind === 'tokens' && (
+            <div>
+              <dt>{t('First response latency')}</dt>
+              <dd>
+                {formatDurationMilliseconds(
+                  timing.firstResponse === undefined ? undefined : timing.firstResponse * 1000,
+                  locale,
+                )}
+              </dd>
+            </div>
           )}
-        </p>
+          {metric.kind === 'tokens' && (
+            <div>
+              <dt>{t('Average output speed')}</dt>
+              <dd>
+                {timing.tokensPerSecond === undefined
+                  ? '—'
+                  : `${formatNumber(timing.tokensPerSecond, locale, { maximumFractionDigits: 2 })} token/s`}
+              </dd>
+            </div>
+          )}
+        </dl>
+        {metric.kind === 'tokens' && (
+          <p className="muted usage-filter-help">
+            {t(
+              'Speed includes waiting time; only streamed text with recorded output and duration is measured.',
+            )}
+          </p>
+        )}
       </section>
       <details className="request-billing-disclosure">
         <summary>{t('Billing details')}</summary>

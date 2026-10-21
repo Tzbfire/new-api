@@ -15,6 +15,9 @@ import {
   Select,
 } from '@/components/ui'
 import { toIntlLocale } from '@/i18n/languages'
+import { CatalogProvider, useCatalog } from '@/lib/catalog'
+import { ServiceGroupOptions } from '@/components/service-group-options'
+import { PlanGroupLinks } from './PlanGroupLinks'
 import { ModelPriceList } from '@/components/model-price-list'
 import { request } from '@/lib/api'
 import { formatDate, formatMoney, formatBalance } from '@/lib/format'
@@ -198,21 +201,10 @@ export default function PlansPage() {
                 <Check size={17} />
                 <span>
                   {t('Service groups')}:{' '}
-                  {plan.allowed_token_groups
-                    ? plan.allowed_token_groups
-                        .split(',')
-                        .map((value) => value.trim())
-                        .filter(Boolean)
-                        .map((group) => (
-                          <Button
-                            key={group}
-                            variant="ghost"
-                            onClick={() => setPreview({ plan, group })}
-                          >
-                            {group}
-                          </Button>
-                        ))
-                    : t('All available groups')}
+                  <PlanGroupLinks
+                    value={plan.allowed_token_groups}
+                    onSelect={(group) => setPreview({ plan, group })}
+                  />
                 </span>
               </li>
               <li>
@@ -323,16 +315,23 @@ export default function PlansPage() {
         open={!!preview}
         onClose={() => setPreview(null)}
         title={t('Plan model preview')}
-        description={preview ? `${preview.plan.title} · ${preview.group}` : undefined}
+        description={
+          preview ? [preview.plan.title, preview.group].filter(Boolean).join(' · ') : undefined
+        }
         className="model-prices-modal"
       >
-        {preview && (
-          <PlanGroupModels
-            key={`${preview.plan.id}:${preview.group}`}
-            planId={preview.plan.id}
-            group={preview.group}
-          />
-        )}
+        {preview &&
+          (preview.group ? (
+            <PlanGroupModels
+              key={`${preview.plan.id}:${preview.group}`}
+              planId={preview.plan.id}
+              group={preview.group}
+            />
+          ) : (
+            <CatalogProvider scope="plan-preview-groups">
+              <AvailablePlanGroups planId={preview.plan.id} />
+            </CatalogProvider>
+          ))}
       </Modal>
       <CheckoutDialog
         checkout={checkout}
@@ -385,6 +384,39 @@ function PlanGroupModels(props: { planId: number; group: string }) {
         <p className="muted">{t('Available after purchasing this plan.')}</p>
       )}
       <ModelPriceList models={data.models} group={data.group} planId={props.planId} />
+    </div>
+  )
+}
+
+function AvailablePlanGroups(props: { planId: number }) {
+  const { t } = useTranslation()
+  const catalog = useCatalog()
+  const groups = catalog.groups.filter((group) => group.id !== 'auto')
+  const selected = groups.find((group) => group.id === catalog.group)?.id || groups[0]?.id || ''
+  if (catalog.metadataPending) return <LoadingState />
+  if (catalog.metadataError)
+    return <ErrorState error={catalog.metadataError} retry={catalog.refetch} />
+  if (!selected)
+    return (
+      <EmptyState
+        compact
+        title={t(
+          'This service group is not available to your account. Contact the administrator to check access.',
+        )}
+      />
+    )
+  return (
+    <div className="stack">
+      <ServiceGroupOptions
+        label={t('Service groups')}
+        groups={groups}
+        value={selected}
+        onValueChange={catalog.setGroup}
+        status={t(
+          'Group choices reflect your current account. Plan access after purchase may differ.',
+        )}
+      />
+      <PlanGroupModels key={`${props.planId}:${selected}`} planId={props.planId} group={selected} />
     </div>
   )
 }

@@ -3,11 +3,48 @@ import { render, screen, within } from '@testing-library/react'
 import { createInstance } from 'i18next'
 import { I18nextProvider } from 'react-i18next'
 import { afterEach, expect, it, vi } from 'vitest'
+import userEvent from '@testing-library/user-event'
+import { acceptAuthBundle, clearAuth } from '@/lib/auth-state'
+import { SessionProvider } from '@/lib/session'
 import { ActivePlanSummary } from '../ActivePlanSummary'
 import type { UserSubscription } from '../api'
 
-afterEach(() => vi.unstubAllGlobals())
-async function showPlans(active: UserSubscription[], history: UserSubscription[] = []) {
+afterEach(() => {
+  vi.unstubAllGlobals()
+  clearAuth()
+  localStorage.clear()
+})
+async function showPlans(
+  active: UserSubscription[],
+  history: UserSubscription[] = [],
+  groups = ['default', 'codeplan'],
+) {
+  acceptAuthBundle({
+    access_token: 'synthetic-active-plan-test',
+    token_type: 'Bearer',
+    access_expires_at: 9999999999,
+    user: {
+      id: 21,
+      username: 'plan-user',
+      display_name: '',
+      email: '',
+      role: 1,
+      group: 'default',
+      quota: 0,
+      used_quota: 0,
+      request_count: 0,
+    },
+    session: {
+      sid: 'active-plan-test',
+      current: true,
+      login_method: 'password',
+      ip: '',
+      user_agent: '',
+      created_at: 1,
+      last_active_at: 1,
+      expires_at: 9999999999,
+    },
+  })
   vi.stubGlobal(
     'fetch',
     vi.fn(async (path: string) => {
@@ -32,6 +69,42 @@ async function showPlans(active: UserSubscription[], history: UserSubscription[]
             all_subscriptions: history.map((subscription) => ({ subscription })),
           },
         })
+      if (path === '/api/pricing')
+        return Response.json({
+          success: true,
+          data: ['default', 'codeplan'].map((group) => ({
+            model_name: `${group}-model`,
+            supported_endpoint_types: ['openai'],
+            enable_groups: [group],
+          })),
+          usable_group: { default: 'Default', codeplan: 'Code plan' },
+          group_ratio: { default: 1, codeplan: 2 },
+        })
+      if (path === '/api/user/self/groups')
+        return Response.json({
+          success: true,
+          data: Object.fromEntries(groups.map((group) => [group, { desc: group, ratio: 1 }])),
+        })
+      if (path.startsWith('/api/user/models?')) {
+        const group = new URL(path, 'http://localhost').searchParams.get('group') || ''
+        if (!groups.includes(group))
+          return Response.json({ success: false, message: 'Group access denied' }, { status: 403 })
+        return Response.json({ success: true, data: [`${group}-model`] })
+      }
+      if (path.startsWith('/api/pricing/quote?'))
+        return Response.json({
+          success: true,
+          data: {
+            quotes: [
+              {
+                label: 'Current price',
+                billing_mode: 'per_call',
+                billing_unit: 'request',
+                usd: 0.25,
+              },
+            ],
+          },
+        })
       throw new Error(`Unexpected test request ${path}`)
     }),
   )
@@ -42,7 +115,9 @@ async function showPlans(active: UserSubscription[], history: UserSubscription[]
       <QueryClientProvider
         client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
       >
-        <ActivePlanSummary />
+        <SessionProvider>
+          <ActivePlanSummary />
+        </SessionProvider>
       </QueryClientProvider>
     </I18nextProvider>,
   )
@@ -111,4 +186,46 @@ it('rounds fractional monetary allowances to two decimals in plan summaries', as
   expect(within(code).getByText('$7.50')).toBeVisible()
   expect(within(code).getByText('$2.50')).toBeVisible()
   expect(within(code).getByText('$10.00')).toBeVisible()
+})
+
+it('opens current authorized models from an active plan even after it leaves the sale catalog', async () => {
+  await showPlans([{ ...plan, plan_id: 99 }])
+  await userEvent.click(await screen.findByRole('button', { name: 'codeplan' }))
+  const dialog = await screen.findByRole('dialog', { name: 'View supported models and prices' })
+  expect(await within(dialog).findByText('codeplan-model')).toBeVisible()
+  expect(await within(dialog).findByText('$0.25')).toBeVisible()
+  expect(within(dialog).queryByText('default-model')).not.toBeInTheDocument()
+  expect(
+    vi.mocked(fetch).mock.calls.some(([path]) => String(path).includes('/plans/99/pricing')),
+  ).toBe(false)
+})
+it('allows an unrestricted active plan to compare its currently available service groups', async () => {
+  await showPlans([{ ...plan, allowed_token_groups: '' }])
+  await userEvent.click(await screen.findByRole('button', { name: 'All available groups' }))
+  const dialog = await screen.findByRole('dialog', { name: 'View supported models and prices' })
+  expect(await within(dialog).findByText('default-model')).toBeVisible()
+  await userEvent.click(within(dialog).getByRole('button', { name: /codeplan/ }))
+  expect(await within(dialog).findByText('codeplan-model')).toBeVisible()
+  expect(within(dialog).queryByText('default-model')).not.toBeInTheDocument()
+})
+it('explains lost group access rather than silently showing models from another group', async () => {
+  await showPlans([{ ...plan, allowed_token_groups: 'retired' }])
+  await userEvent.click(await screen.findByRole('button', { name: 'retired' }))
+  expect(
+    await screen.findByText(
+      'This service group is not available to your account. Contact the administrator to check access.',
+    ),
+  ).toBeVisible()
+  expect(screen.queryByText('default-model')).not.toBeInTheDocument()
+})
+
+it('shows an access explanation instead of an endless loader when no groups are available', async () => {
+  await showPlans([{ ...plan, allowed_token_groups: '' }], [], [])
+  await userEvent.click(await screen.findByRole('button', { name: 'All available groups' }))
+  expect(
+    await screen.findByText(
+      'This service group is not available to your account. Contact the administrator to check access.',
+    ),
+  ).toBeVisible()
+  expect(screen.queryByText('Loading your space…')).not.toBeInTheDocument()
 })

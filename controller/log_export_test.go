@@ -244,3 +244,110 @@ func TestAcquireLogExportLock(t *testing.T) {
 		})
 	}
 }
+
+func TestLogTokenFilterDatabaseMatrix(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousMaster := common.IsMasterNode
+	common.IsMasterNode = true
+	t.Cleanup(func() { common.IsMasterNode = previousMaster })
+	for _, database := range []struct {
+		kind, env string
+		typ       common.DatabaseType
+	}{
+		{"sqlite", "", common.DatabaseTypeSQLite},
+		{"mysql", "AUDIT_MYSQL_DSN", common.DatabaseTypeMySQL},
+		{"postgres", "AUDIT_POSTGRES_DSN", common.DatabaseTypePostgreSQL},
+		{"clickhouse", "AUDIT_CLICKHOUSE_DSN", common.DatabaseTypeClickHouse},
+	} {
+		t.Run(database.kind, func(t *testing.T) {
+			dsn := os.Getenv(database.env)
+			if database.env != "" && dsn == "" {
+				t.Skip(database.env + " is not configured")
+			}
+			mainDB, _ := newAuditTestDatabase(t, "sqlite", "")
+			logDB, isolatedDSN := newAuditTestDatabase(t, database.kind, dsn)
+			useLogExportDatabases(t, mainDB, logDB, common.DatabaseTypeSQLite, database.typ)
+			if database.kind == "clickhouse" {
+				t.Setenv("LOG_SQL_DSN", isolatedDSN)
+				require.NoError(t, model.InitLogDB())
+			} else {
+				require.NoError(t, logDB.AutoMigrate(&model.Log{}))
+			}
+			versionSQL := "SELECT version()"
+			if database.kind == "sqlite" {
+				versionSQL = "SELECT sqlite_version()"
+			}
+			var version string
+			require.NoError(t, model.LOG_DB.Raw(versionSQL).Scan(&version).Error)
+			t.Logf("separate log database: %s %s", database.kind, version)
+			now := time.Now().Unix()
+			logs := []model.Log{
+				{UserId: 1, Username: "old-user-name", TokenId: 11, TokenName: "Before rename", CreatedAt: now - 3600, Type: model.LogTypeConsume, RequestId: "renamed-old", Quota: 10, PromptTokens: 2, CompletionTokens: 3},
+				{UserId: 1, Username: "alice", TokenId: 11, TokenName: "Editor", CreatedAt: now - 5, Type: model.LogTypeConsume, RequestId: "renamed-current", Quota: 20, PromptTokens: 5, CompletionTokens: 7},
+				{UserId: 1, Username: "alice", TokenId: 11, TokenName: "Editor", CreatedAt: now - 1, Type: model.LogTypeError, RequestId: "key-error"},
+				{UserId: 1, Username: "alice", TokenId: 12, TokenName: "Editor", CreatedAt: now - 2, Type: model.LogTypeConsume, RequestId: "same-name-other-key", Quota: 50},
+				{UserId: 2, Username: "alice", TokenId: 21, TokenName: "Editor", CreatedAt: now - 3, Type: model.LogTypeConsume, RequestId: "other-user", Quota: 100},
+			}
+			for i := range logs {
+				require.NoError(t, model.LOG_DB.Create(&logs[i]).Error)
+			}
+			period := fmt.Sprintf("start_timestamp=%d&end_timestamp=%d", now-7200, now)
+			for _, tc := range []struct {
+				name, query string
+				total       int
+				requests    []string
+			}{
+				{"stable ID includes old names and errors", "token_id=11", 3, []string{"key-error", "renamed-current", "renamed-old"}},
+				{"pagination uses key-specific total", "token_id=11&p=2&page_size=2", 3, []string{"renamed-old"}},
+				{"same name stays a separate key", "token_id=12", 1, []string{"same-name-other-key"}},
+				{"foreign key cannot escape user scope", "token_id=21", 0, []string{}},
+				{"unknown key is empty", "token_id=99", 0, []string{}},
+				{"error filter combines with key", "token_id=11&type=5", 1, []string{"key-error"}},
+				{"legacy name filter remains supported", "token_name=Before%20rename", 1, []string{"renamed-old"}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					response := callLogHandler(t, GetUserLogs, 1, common.RoleCommonUser, period+"&"+tc.query)[0]
+					require.Equal(t, true, response["success"])
+					data := response["data"].(map[string]any)
+					assert.EqualValues(t, tc.total, data["total"])
+					requests := make([]string, 0)
+					for _, item := range data["items"].([]any) {
+						requests = append(requests, item.(map[string]any)["request_id"].(string))
+					}
+					assert.Equal(t, tc.requests, requests)
+				})
+			}
+			for _, tc := range []struct {
+				query string
+				quota int
+				rpm   int
+				tpm   int
+			}{
+				{"token_id=11", 30, 1, 12},
+				{"token_id=11&request_id=missing&upstream_request_id=missing", 30, 1, 12},
+				{"token_id=11&channel=99", 0, 0, 0},
+				{"token_id=11&token_name=Before%20rename", 10, 0, 0},
+				{"token_id=12", 50, 1, 0},
+				{"token_id=21", 0, 0, 0},
+				{"token_id=99", 0, 0, 0},
+				{"", 80, 2, 12},
+			} {
+				response := callLogHandler(t, GetLogsSelfStat, 1, common.RoleCommonUser, period+"&"+tc.query)[0]
+				require.Equal(t, true, response["success"])
+				assert.Equal(t, map[string]any{"quota": float64(tc.quota), "rpm": float64(tc.rpm), "tpm": float64(tc.tpm)}, response["data"], tc.query)
+			}
+			ownExport := callLogHandler(t, ExportUserLogs, 1, common.RoleCommonUser, period+"&token_id=11")
+			assert.Equal(t, []any{"key-error", "renamed-current", "renamed-old"}, exportedRequestIds(ownExport))
+			foreignExport := callLogHandler(t, ExportUserLogs, 1, common.RoleCommonUser, period+"&token_id=21")
+			require.Len(t, foreignExport, 1)
+			assert.EqualValues(t, 0, foreignExport[0]["data"].(map[string]any)["count"])
+			for _, invalid := range []string{"", "0", "-1", "x", "1.5", "99999999999999999999999", "11&token_id=12", "11%20OR%201=1"} {
+				for _, handler := range []gin.HandlerFunc{GetUserLogs, GetLogsSelfStat, ExportUserLogs, GetAllLogs, GetLogsStat} {
+					response := callLogHandler(t, handler, 1, common.RoleAdminUser, period+"&token_id="+invalid)[0]
+					assert.Equal(t, false, response["success"], invalid)
+					assert.Equal(t, "Invalid parameters", response["message_key"], invalid)
+				}
+			}
+		})
+	}
+}

@@ -49,6 +49,109 @@ it('uses an explicit bounded image count and ignores malformed counts', () => {
   ).toEqual({ kind: 'images' })
 })
 
+it('reads the settled quantity from fixed-price image log messages and prefers the explicit field', () => {
+  const log = { prompt_tokens: 1, completion_tokens: 0 }
+  const details = {
+    request_path: '/v1/images/generations',
+    content_parts: [
+      { key: 'Quality {{quality}}', params: { quality: 'high' } },
+      { key: 'Image count {{count}}', params: { count: 3 } },
+    ],
+  }
+  expect(usageMetric({ ...log, other: JSON.stringify(details) })).toEqual({
+    kind: 'images',
+    count: 3,
+  })
+  expect(usageMetric({ ...log, other: JSON.stringify({ ...details, image_count: 2 }) })).toEqual({
+    kind: 'images',
+    count: 2,
+  })
+})
+
+it.each([
+  null,
+  [],
+  {},
+  { key: 'Other {{count}}', params: { count: 5 } },
+  { key: 'Image count {{count}}', params: { count: '2' } },
+  { key: 'Image count {{count}}', params: { count: -1 } },
+  { key: 'Image count {{count}}', params: { count: 1.5 } },
+])('does not invent quantities from malformed image metadata: %j', (part) => {
+  expect(
+    usageMetric({
+      prompt_tokens: 1,
+      completion_tokens: 0,
+      other: JSON.stringify({ request_path: '/v1/images/generations', content_parts: [part] }),
+    }),
+  ).toEqual({ kind: 'images' })
+})
+
+it('reads task usage facts without treating requested tokens as image quantities', () => {
+  expect(
+    usageMetric({
+      prompt_tokens: 1,
+      completion_tokens: 0,
+      other: JSON.stringify({ is_task: true, usage_facts: { image_count: 4 } }),
+    }),
+  ).toEqual({ kind: 'images', count: 4 })
+})
+
+it.each(['品质 standard, 生成数量 2', 'Quality standard, Image count 2'])(
+  'reads the exact historical gateway image count field: %s',
+  (content) => {
+    expect(
+      usageMetric({
+        prompt_tokens: 1,
+        completion_tokens: 0,
+        content,
+        other: '{"request_path":"/v1/images/generations"}',
+      }),
+    ).toEqual({ kind: 'images', count: 2 })
+  },
+)
+
+it.each([
+  'Generated 2 images',
+  '生成数量 2.5',
+  '生成数量 -1',
+  '生成数量 2, 生成数量 3',
+  'Image count 9007199254740992',
+])('does not guess an image count from ambiguous historical text: %s', (content) => {
+  expect(
+    usageMetric({
+      prompt_tokens: 1,
+      completion_tokens: 0,
+      content,
+      other: '{"request_path":"/v1/images/generations"}',
+    }),
+  ).toEqual({ kind: 'images' })
+})
+
+it('does not parse image-like text in chat logs or override conflicting structured quantities', () => {
+  expect(
+    usageMetric({
+      prompt_tokens: 1,
+      completion_tokens: 0,
+      content: 'Image count 2',
+      other: '{"request_path":"/v1/chat/completions"}',
+    }),
+  ).toEqual({ kind: 'tokens', count: 1 })
+  expect(
+    usageMetric({
+      prompt_tokens: 1,
+      completion_tokens: 0,
+      content: 'Image count 2',
+      other: JSON.stringify({
+        request_path: '/v1/images/edits',
+        content_parts: [
+          { key: 'Image count {{count}}', params: { count: 2 } },
+          { key: 'Image count {{count}}', params: { count: 3 } },
+        ],
+      }),
+    }),
+  ).toEqual({ kind: 'images' })
+})
+
 it.each(['null', '[]', '{broken'])(
   'keeps historical logs readable when metadata is %s',
   (other) => {

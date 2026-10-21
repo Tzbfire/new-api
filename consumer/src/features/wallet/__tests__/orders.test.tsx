@@ -49,7 +49,7 @@ it('requests the chosen order page and resets to the first page when page size o
   )
   await waitFor(() =>
     expect(fetcher).toHaveBeenCalledWith(
-      '/api/user/topup/self?p=3&page_size=15&keyword=',
+      '/api/user/topup/self?p=3&page_size=15&status=success&keyword=',
       expect.anything(),
     ),
   )
@@ -57,7 +57,7 @@ it('requests the chosen order page and resets to the first page when page size o
   await user.click(await screen.findByRole('option', { name: '30' }))
   await waitFor(() =>
     expect(fetcher).toHaveBeenCalledWith(
-      '/api/user/topup/self?p=1&page_size=30&keyword=',
+      '/api/user/topup/self?p=1&page_size=30&status=success&keyword=',
       expect.anything(),
     ),
   )
@@ -66,7 +66,7 @@ it('requests the chosen order page and resets to the first page when page size o
   await user.click(screen.getByRole('button', { name: 'Search' }))
   await waitFor(() =>
     expect(fetcher).toHaveBeenCalledWith(
-      '/api/user/topup/self?p=1&page_size=30&keyword=abc%26123',
+      '/api/user/topup/self?p=1&page_size=30&status=success&keyword=abc%26123',
       expect.anything(),
     ),
   )
@@ -87,7 +87,7 @@ it('retains visible orders during page loading and removes them when the search 
     create_time: 1790000000,
     payment_method: 'alipay',
     money: 10,
-    status: 'pending',
+    status: 'success',
   }
   await setup(async (path) => {
     if (path.includes('keyword=missing')) return deferredSearch
@@ -121,4 +121,34 @@ it('retains visible orders during page loading and removes them when the search 
   await act(async () =>
     resolveSearch(Response.json({ success: true, data: { items: [], total: 0 } })),
   )
+})
+
+it('shows only completed payments from the server and explains an empty payment history', async () => {
+  const completed = {
+    id: 2,
+    trade_no: 'completed-order',
+    create_time: 1790000000,
+    payment_method: 'alipay',
+    money: 10,
+    status: 'success',
+  }
+  const pending = { ...completed, id: 3, trade_no: 'pending-order', status: 'pending' }
+  const fetcher = vi.fn(async (path: string) => {
+    const params = new URL(path, 'https://example.com').searchParams
+    if (params.get('keyword') === 'missing') {
+      return Response.json({ success: true, data: { items: [], total: 0 } })
+    }
+    const items = params.get('status') === 'success' ? [completed] : [pending, completed]
+    return Response.json({ success: true, data: { items, total: items.length } })
+  })
+  await setup(fetcher)
+  expect(await screen.findByText('completed-order')).toBeVisible()
+  expect(screen.queryByText('pending-order')).not.toBeInTheDocument()
+  expect(screen.getByText('Only completed payments are shown.')).toBeVisible()
+  expect(screen.getByText('1–1 of 1')).toBeVisible()
+  const user = userEvent.setup()
+  await user.type(screen.getByRole('textbox', { name: 'Search orders' }), 'missing')
+  await user.click(screen.getByRole('button', { name: 'Search' }))
+  expect(await screen.findByText('No matching payments')).toBeVisible()
+  expect(screen.queryByText('completed-order')).not.toBeInTheDocument()
 })

@@ -134,6 +134,33 @@ it('keeps setup in the page actions and search options together so keys follow t
   expect(screen.getByText('Synthetic app')).toBeVisible()
 })
 
+it('links same-name and inactive keys to their own usage records without revealing secrets', async () => {
+  const fetcher = await renderKeys(<KeysPage />, async () =>
+    Response.json({
+      success: true,
+      data: {
+        items: [key, { ...key, id: 2, status: 2 }],
+        total: 2,
+        page: 1,
+        page_size: 12,
+      },
+    }),
+  )
+  const links = await screen.findAllByRole('link', {
+    name: 'View usage records for Synthetic app',
+  })
+  expect(links).toHaveLength(2)
+  links.forEach((link, index) => {
+    const href = new URL(link.getAttribute('href')!, 'http://localhost')
+    expect(href.pathname).toBe('/usage')
+    expect(href.searchParams.get('token_id')).toBe(String(index + 1))
+    expect(href.searchParams.get('token_label')).toBe('Synthetic app')
+    expect(href.searchParams.has('token_name')).toBe(false)
+    expect(href.href).not.toContain(key.key)
+  })
+  expect(fetcher.mock.calls.some(([path]) => path.endsWith('/key'))).toBe(false)
+})
+
 it('rejects an empty spending limit while preserving an explicitly entered zero', async () => {
   const onSaved = vi.fn()
   const fetch = await renderKeys(

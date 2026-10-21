@@ -199,6 +199,18 @@ describe('provider checkout contracts', () => {
       client.clear()
     },
   )
+  it('opens group choices for an unrestricted plan and requests its server preview', async () => {
+    const { client, fetcher } = await renderPlanPreview({ unrestricted: true })
+    await userEvent.click(await screen.findByRole('button', { name: 'All available groups' }))
+    expect(await screen.findByText('Plan code model')).toBeVisible()
+    expect(await screen.findByText('$0.42')).toBeVisible()
+    expect(
+      fetcher.mock.calls.some(
+        ([path]) => path === '/api/subscription/plans/9/pricing?group=default',
+      ),
+    ).toBe(true)
+    client.clear()
+  })
   it('keeps server price previews separate for plans covering the same group', async () => {
     const { client, fetcher } = await renderPlanPreview({ secondPlan: true })
     const buttons = await screen.findAllByRole('button', { name: 'codeplan' })
@@ -376,6 +388,7 @@ async function renderPlanPreview(
     selectableNow?: boolean
     selectableAfterPurchase?: boolean
     secondPlan?: boolean
+    unrestricted?: boolean
     result?: 'empty' | 'disabled' | 'error'
   } = {},
 ) {
@@ -422,7 +435,7 @@ async function renderPlanPreview(
             title: `Code plan ${id}`,
             currency: 'USD',
             price_amount: 10,
-            allowed_token_groups: 'codeplan',
+            allowed_token_groups: options.unrestricted ? '' : 'codeplan',
             duration_unit: 'month',
             duration_value: 1,
             total_amount: 0,

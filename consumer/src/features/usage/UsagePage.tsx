@@ -17,7 +17,7 @@ import {
 } from '@/components/ui'
 import { request } from '@/lib/api'
 import { useCatalog } from '@/lib/catalog'
-import { formatDate, formatNumber, formatQuota } from '@/lib/format'
+import { formatDate, formatDurationMilliseconds, formatNumber, formatQuota } from '@/lib/format'
 import { useSession } from '@/lib/session'
 import { useStatus } from '@/lib/status'
 import { toIntlLocale } from '@/i18n/languages'
@@ -44,6 +44,7 @@ export interface UsageLog {
   token_name: string
   request_id: string
   other: string
+  content?: string
 }
 interface UsagePageData {
   items: UsageLog[]
@@ -55,7 +56,12 @@ interface UsageStats {
   tpm: number
 }
 
-export default function UsagePage(props: { initialRequestId?: string; initialFrom?: number }) {
+export default function UsagePage(props: {
+  initialRequestId?: string
+  initialFrom?: number
+  initialTokenId?: number
+  initialTokenName?: string
+}) {
   const { t, i18n } = useTranslation()
   const site = useStatus()
   const catalog = useCatalog()
@@ -69,8 +75,9 @@ export default function UsagePage(props: { initialRequestId?: string; initialFro
     model: '',
     group: '',
     token: '',
+    tokenID: props.initialTokenId,
     requestID: props.initialRequestId || '',
-    type: '2',
+    type: props.initialTokenId ? '0' : '2',
     from: '',
     until: '',
   })
@@ -97,9 +104,10 @@ export default function UsagePage(props: { initialRequestId?: string; initialFro
     end_timestamp: String(end),
     model_name: filters.model,
     group: filters.group,
-    token_name: filters.token,
+    token_name: filters.tokenID ? '' : filters.token,
     request_id: filters.requestID,
   })
+  if (filters.tokenID) params.set('token_id', String(filters.tokenID))
   const logs = useQuery({
     queryKey: ['usage-logs', page, pageSize, params.toString(), session.user?.id],
     placeholderData: (previous, query) =>
@@ -120,7 +128,7 @@ export default function UsagePage(props: { initialRequestId?: string; initialFro
     queryKey: ['usage-history', start, end, session.user?.id],
     queryFn: () =>
       request<UsagePoint[]>(`/api/data/self?start_timestamp=${start}&end_timestamp=${end}`),
-    enabled: site.data?.enable_data_export === true,
+    enabled: site.data?.enable_data_export === true && !filters.tokenID,
   })
   const daily = useMemo(
     () => dailyUsage(history.data || [], start, end),
@@ -151,7 +159,12 @@ export default function UsagePage(props: { initialRequestId?: string; initialFro
       label: 'Until',
       value: filters.until ? formatDate(new Date(filters.until).getTime() / 1000, locale) : '',
     },
-    { label: 'API key name', value: filters.token },
+    {
+      label: 'API key name',
+      value: filters.tokenID
+        ? `${props.initialTokenName || t('API key')} (#${filters.tokenID})`
+        : filters.token,
+    },
     { label: 'Request ID', value: filters.requestID },
     {
       label: 'Record type',
@@ -288,6 +301,7 @@ export default function UsagePage(props: { initialRequestId?: string; initialFro
                     model: '',
                     group: '',
                     token: '',
+                    tokenID: undefined,
                     requestID: '',
                     type: '2',
                     from: '',
@@ -330,6 +344,7 @@ export default function UsagePage(props: { initialRequestId?: string; initialFro
               <Field label={t('API key name')}>
                 <Input
                   value={draft.token}
+                  disabled={!!draft.tokenID}
                   placeholder={t('All API keys')}
                   onChange={(event) => setDraft({ ...draft, token: event.target.value })}
                 />
@@ -372,6 +387,18 @@ export default function UsagePage(props: { initialRequestId?: string; initialFro
                   {t(filter.label)}: {filter.value}
                 </Badge>
               ))}
+              {filters.tokenID && (
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setDraft({ ...draft, tokenID: undefined, token: '' })
+                    setFilters({ ...filters, tokenID: undefined, token: '' })
+                    setPage(1)
+                  }}
+                >
+                  {t('All API keys')}
+                </Button>
+              )}
             </div>
           )}
         </form>
@@ -407,57 +434,66 @@ export default function UsagePage(props: { initialRequestId?: string; initialFro
         </Card>
       </div>
       {stats.error && <ErrorState error={stats.error} retry={() => void stats.refetch()} />}
-      <Card
-        data-testid="usage-chart-shell"
-        className="usage-chart-shell"
-        aria-busy={history.isFetching}
-      >
-        <h2>{t('Your spending over time')}</h2>
-        <p className="muted">
-          {t('All models and groups. Dashboard data can take a few minutes to update.')}
-        </p>
-        <div className="usage-chart-region">
-          {history.data ? (
-            <SpendingChart daily={daily} />
-          ) : (
-            <div className="usage-chart-placeholder">{'—'}</div>
-          )}
-        </div>
-        <p className="muted">
-          {t('Dates use your device time zone: {{zone}}', {
-            zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          })}
-        </p>
-        <details aria-busy={history.isFetching}>
-          <summary
-            aria-disabled={!history.data}
-            onClick={(event) => {
-              if (!history.data) event.preventDefault()
-            }}
-          >
-            {t('View daily spending')}
-          </summary>
-          {history.data && (
-            <table className="consumer-table">
-              <thead>
-                <tr>
-                  <th>{t('Date')}</th>
-                  <th>{t('Cost')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {daily.map((day) => (
-                  <tr key={day.date}>
-                    <td>{dateFormat.format(new Date(day.date * 1000))}</td>
-                    <td>{formatQuota(day.quota, site.data, locale)}</td>
+      {!filters.tokenID && (
+        <Card
+          data-testid="usage-chart-shell"
+          className="usage-chart-shell"
+          aria-busy={history.isFetching}
+        >
+          <h2>{t('Your spending over time')}</h2>
+          <p className="muted">
+            {t('All models and groups. Dashboard data can take a few minutes to update.')}
+          </p>
+          <div className="usage-chart-region">
+            {history.data ? (
+              <SpendingChart daily={daily} />
+            ) : (
+              <div className="usage-chart-placeholder">{'—'}</div>
+            )}
+          </div>
+          <p className="muted">
+            {t('Dates use your device time zone: {{zone}}', {
+              zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            })}
+          </p>
+          <details aria-busy={history.isFetching}>
+            <summary
+              aria-disabled={!history.data}
+              onClick={(event) => {
+                if (!history.data) event.preventDefault()
+              }}
+            >
+              {t('View daily spending')}
+            </summary>
+            {history.data && (
+              <table className="consumer-table">
+                <thead>
+                  <tr>
+                    <th>{t('Date')}</th>
+                    <th>{t('Cost')}</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </details>
-      </Card>
-      {history.error && <ErrorState error={history.error} retry={() => void history.refetch()} />}
+                </thead>
+                <tbody>
+                  {daily.map((day) => (
+                    <tr key={day.date}>
+                      <td>{dateFormat.format(new Date(day.date * 1000))}</td>
+                      <td>{formatQuota(day.quota, site.data, locale)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </details>
+        </Card>
+      )}
+      {!!filters.tokenID && (
+        <p className="muted usage-filter-help">
+          {t('Showing records and spending for this key. The account-wide trend is hidden.')}
+        </p>
+      )}
+      {!filters.tokenID && history.error && (
+        <ErrorState error={history.error} retry={() => void history.refetch()} />
+      )}
       <h2 id="usage-records" tabIndex={-1}>
         {t('Request history')}
       </h2>
@@ -538,8 +574,6 @@ export default function UsagePage(props: { initialRequestId?: string; initialFro
                 const metric = usageMetric(log)
                 const timing = usageTiming(log)
                 const cache = log.type === 2 ? usageCache(log.other, log.prompt_tokens) : undefined
-                const quantity =
-                  metric.count === undefined ? '—' : formatNumber(metric.count, locale)
                 return (
                   <tr key={log.id}>
                     <td data-label={t('Request')}>
@@ -568,9 +602,22 @@ export default function UsagePage(props: { initialRequestId?: string; initialFro
                     <td data-label={t('Usage quantity')}>
                       <div className="usage-record-metrics">
                         {metric.kind === 'images' ? (
-                          <strong>
-                            {t('Images')}: {quantity}
-                          </strong>
+                          <>
+                            <strong>
+                              {metric.count === undefined
+                                ? t('Image count not recorded')
+                                : t('{{count}} images', {
+                                    count: formatNumber(metric.count, locale),
+                                  })}
+                            </strong>
+                            <span>
+                              {t('Total duration')}:{' '}
+                              {formatDurationMilliseconds(
+                                timing.duration === undefined ? undefined : timing.duration * 1000,
+                                locale,
+                              )}
+                            </span>
+                          </>
                         ) : (
                           <>
                             <strong>
@@ -603,6 +650,17 @@ export default function UsagePage(props: { initialRequestId?: string; initialFro
                               {timing.tokensPerSecond === undefined &&
                                 log.completion_tokens === 0 &&
                                 ` · ${t('No output tokens recorded')}`}
+                            </span>
+                            <span>
+                              {t('First response latency')}:{' '}
+                              {timing.firstResponse === undefined
+                                ? t('Not recorded')
+                                : formatDurationMilliseconds(timing.firstResponse * 1000, locale)}
+                              {' · '}
+                              {t('Total duration')}:{' '}
+                              {timing.duration === undefined
+                                ? t('Not recorded')
+                                : formatDurationMilliseconds(timing.duration * 1000, locale)}
                             </span>
                           </>
                         )}

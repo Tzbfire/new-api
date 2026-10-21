@@ -473,6 +473,7 @@ type LogFilter struct {
 	ModelName         string
 	Username          string
 	TokenName         string
+	TokenId           int
 	Channel           int
 	Group             string
 	RequestId         string
@@ -492,6 +493,9 @@ func (f LogFilter) apply(tx *gorm.DB) (*gorm.DB, error) {
 	}
 	if f.TokenName != "" {
 		tx = tx.Where("logs.token_name = ?", f.TokenName)
+	}
+	if f.TokenId != 0 {
+		tx = tx.Where("logs.token_id = ?", f.TokenId)
 	}
 	if f.RequestId != "" {
 		tx = tx.Where("logs.request_id = ?", f.RequestId)
@@ -677,48 +681,29 @@ type Stat struct {
 	Tpm   int `json:"tpm"`
 }
 
-func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota")
-
-	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
-
-	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
+func SumUsedQuota(filter LogFilter, userId int) (stat Stat, err error) {
+	base := LOG_DB.Table("logs")
+	if userId != 0 {
+		base = base.Where("logs.user_id = ?", userId)
+	}
+	filter.Type = LogTypeConsume
+	// Request identifiers scope the records table, not the spending summary.
+	filter.RequestId = ""
+	filter.UpstreamRequestId = ""
+	tx, err := filter.apply(base.Session(&gorm.Session{}))
+	if err != nil {
 		return stat, err
 	}
-	if rpmTpmQuery, err = applyExplicitLogTextFilter(rpmTpmQuery, "username", username); err != nil {
-		return stat, err
-	}
-	if tokenName != "" {
-		tx = tx.Where("token_name = ?", tokenName)
-		rpmTpmQuery = rpmTpmQuery.Where("token_name = ?", tokenName)
-	}
-	if startTimestamp != 0 {
-		tx = tx.Where("created_at >= ?", startTimestamp)
-	}
-	if endTimestamp != 0 {
-		tx = tx.Where("created_at <= ?", endTimestamp)
-	}
-	if tx, err = applyExplicitLogTextFilter(tx, "model_name", modelName); err != nil {
-		return stat, err
-	}
-	if rpmTpmQuery, err = applyExplicitLogTextFilter(rpmTpmQuery, "model_name", modelName); err != nil {
-		return stat, err
-	}
-	if channel != 0 {
-		tx = tx.Where("channel_id = ?", channel)
-		rpmTpmQuery = rpmTpmQuery.Where("channel_id = ?", channel)
-	}
-	if group != "" {
-		tx = tx.Where(logGroupCol+" = ?", group)
-		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
-	}
+	tx = tx.Select("COALESCE(sum(quota), 0) quota")
 
-	tx = tx.Where("type = ?", LogTypeConsume)
-	rpmTpmQuery = rpmTpmQuery.Where("type = ?", LogTypeConsume)
-
-	// 只统计最近60秒的rpm和tpm
-	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
+	// Rates always describe the latest minute; the selected dates scope spending.
+	filter.StartTimestamp = time.Now().Add(-60 * time.Second).Unix()
+	filter.EndTimestamp = 0
+	rpmTpmQuery, err := filter.apply(base.Session(&gorm.Session{}))
+	if err != nil {
+		return stat, err
+	}
+	rpmTpmQuery = rpmTpmQuery.Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
 
 	// 执行查询
 	if err := tx.Scan(&stat).Error; err != nil {

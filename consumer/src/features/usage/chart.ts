@@ -32,11 +32,41 @@ export function usageMetric(log: {
   prompt_tokens: number
   completion_tokens: number
   other: string
+  content?: string
 }): UsageMetric {
   const details = usageDetails(log.other)
   const requestPath = typeof details.request_path === 'string' ? details.request_path : ''
   const isImageRequest = /(?:^|\/)images\/(?:generations|edits)(?:\/|$)/.test(requestPath)
-  const imageCount = details.image_count
+  // Fixed-price HTTP image requests store their settled count as a structured
+  // log message; expression pricing also exposes image_count directly.
+  const usage = details.usage_facts
+  let imageCount =
+    details.image_count ??
+    (usage && typeof usage === 'object' && 'image_count' in usage ? usage.image_count : undefined)
+  if (imageCount === undefined && Array.isArray(details.content_parts)) {
+    const counts = details.content_parts.flatMap((part: unknown) => {
+      if (
+        !part ||
+        typeof part !== 'object' ||
+        !('key' in part) ||
+        part.key !== 'Image count {{count}}' ||
+        !('params' in part)
+      )
+        return []
+      const params = part.params
+      return params && typeof params === 'object' && 'count' in params ? [params.count] : []
+    })
+    if (counts.length) imageCount = new Set(counts).size === 1 ? counts[0] : null
+  }
+  if (imageCount === undefined && isImageRequest && log.content) {
+    // Pre-structured logs use these exact gateway-authored comma-separated
+    // fields. Never extract quantities from arbitrary messages or token counts.
+    const counts = log.content.split(', ').flatMap((part) => {
+      const match = /^(?:生成数量|Image count) ([1-9][0-9]*)$/.exec(part)
+      return match ? [Number(match[1])] : []
+    })
+    if (new Set(counts).size === 1) imageCount = counts[0]
+  }
   if (typeof imageCount === 'number' && Number.isSafeInteger(imageCount) && imageCount > 0) {
     return { kind: 'images', count: imageCount }
   }

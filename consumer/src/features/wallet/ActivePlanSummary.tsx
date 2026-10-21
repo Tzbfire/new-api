@@ -1,10 +1,15 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { ErrorState, LoadingState } from '@/components/ui'
+import { CatalogProvider, useCatalog } from '@/lib/catalog'
+import { ServiceGroupOptions } from '@/components/service-group-options'
+import { ServiceGroupModelsDialog } from '@/components/service-group-models-dialog'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatDate, formatNumber, formatBalance } from '@/lib/format'
 import { useStatus } from '@/lib/status'
 import { getPlans, getSubscriptions } from './api'
+import { PlanGroupLinks } from './PlanGroupLinks'
 import './active-plan-summary.css'
 
 /** Each entitlement keeps its own balance and reset cycle; never sums separate plans. */
@@ -14,6 +19,7 @@ export function ActivePlanSummary() {
   const site = useStatus()
   const subscriptions = useQuery({ queryKey: ['subscriptions'], queryFn: getSubscriptions })
   const plans = useQuery({ queryKey: ['plans'], queryFn: getPlans })
+  const [preview, setPreview] = useState<{ group: string; title: string } | null>(null)
   return (
     <section className="active-plan-summary" aria-label={t('Your active plans')}>
       <h2>{t('Your active plans')}</h2>
@@ -114,7 +120,15 @@ export function ActivePlanSummary() {
               <div className="active-plan-footer">
                 <p className="muted active-plan-scope">
                   {t('Service groups')}:{' '}
-                  {subscription.allowed_token_groups || t('All available groups')}
+                  <PlanGroupLinks
+                    value={subscription.allowed_token_groups}
+                    onSelect={(group) =>
+                      setPreview({
+                        group,
+                        title: title || t('Plan #{{id}}', { id: subscription.plan_id }),
+                      })
+                    }
+                  />
                 </p>
                 <p className="muted active-plan-scope">
                   {t(
@@ -128,6 +142,40 @@ export function ActivePlanSummary() {
           )
         })}
       </div>
+      {preview && (
+        <CatalogProvider
+          scope="active-plan-preview"
+          intent={{ key: `${preview.title}:${preview.group}`, group: preview.group }}
+        >
+          <ActivePlanModels
+            group={preview.group}
+            title={preview.title}
+            onClose={() => setPreview(null)}
+          />
+        </CatalogProvider>
+      )}
     </section>
+  )
+}
+
+function ActivePlanModels(props: { group: string; title: string; onClose: () => void }) {
+  const { t } = useTranslation()
+  const catalog = useCatalog()
+  return (
+    <ServiceGroupModelsDialog
+      group={props.group || catalog.group}
+      description={`${props.title} · ${t('Only models authorized for your account are shown.')}`}
+      onClose={props.onClose}
+      groupPicker={
+        !props.group ? (
+          <ServiceGroupOptions
+            label={t('Service groups')}
+            groups={catalog.groups}
+            value={catalog.group}
+            onValueChange={catalog.setGroup}
+          />
+        ) : undefined
+      }
+    />
   )
 }

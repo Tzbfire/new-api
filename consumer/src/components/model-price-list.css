@@ -8,6 +8,9 @@
 .model-prices-modal > p {
   margin-bottom: 22px;
 }
+.service-group-model-preview {
+  margin-block: 16px 24px;
+}
 .price-comparison-toolbar {
   display: flex;
   gap: 16px;

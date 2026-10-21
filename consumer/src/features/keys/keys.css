@@ -98,9 +98,6 @@
   flex-wrap: wrap;
   gap: 8px;
 }
-.key-model-preview {
-  margin-block: 16px 24px;
-}
 
 .api-address-bar {
   display: grid;
