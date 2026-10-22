@@ -325,7 +325,8 @@ func serveConsumerFrontend(legacyIndex []byte) gin.HandlerFunc {
 				target = location.String()
 			}
 		}
-		useConsumer := enabled && preference != "legacy" && target != ""
+		// The original interface remains the default until the user opts in.
+		useConsumer := enabled && preference == "consumer" && target != ""
 		var consumerIndex []byte
 		if useConsumer && os.Getenv("CONSUMER_FRONTEND_DIR") != "" {
 			consumerIndex, _ = os.ReadFile(filepath.Join(os.Getenv("CONSUMER_FRONTEND_DIR"), "index.html"))

@@ -60,6 +60,18 @@ beforeEach(() => {
 })
 
 describe('frontend preference bootstrap', () => {
+  it('keeps first visits and invalid choices in the legacy interface', () => {
+    for (const preference of ['', 'invalid']) {
+      localStorage.setItem('factory:frontend', preference)
+      const replace = bootstrap({ current: 'legacy', preference })
+      expect(replace).not.toHaveBeenCalled()
+      expect(replace.shouldUseConsumer?.('/keys')).toBe(false)
+      expect(replace.shouldUseConsumer?.('/pricing')).toBe(false)
+      expect(replace.shouldUseConsumer?.('/sign-in?redirect=%2Fkeys')).toBe(false)
+      expect(document.cookie).toBe('')
+    }
+  })
+
   it('restores a saved legacy choice before a shared consumer page starts', () => {
     localStorage.setItem('factory:frontend', 'legacy')
     const replace = bootstrap({})
@@ -119,6 +131,8 @@ describe('frontend preference bootstrap', () => {
       localStorage.setItem('factory:frontend', 'consumer')
       const replace = bootstrap({ current: 'legacy', path })
       expect(replace).toHaveBeenCalledWith(`${path}?tab=mine#section`)
+      expect(document.cookie).toContain('factory_frontend=consumer')
+      expect(replace.shouldUseConsumer?.(path)).toBe(true)
     },
   )
 
@@ -191,9 +205,13 @@ describe('frontend preference bootstrap', () => {
         throw new Error('blocked')
       },
     } as unknown as Storage
-    expect(bootstrap({ storage: blockedStorage })).not.toHaveBeenCalled()
+    const blocked = bootstrap({ current: 'legacy', storage: blockedStorage })
+    expect(blocked).not.toHaveBeenCalled()
+    expect(blocked.shouldUseConsumer?.('/pricing')).toBe(false)
     localStorage.setItem('factory:frontend', 'https://evil.test')
-    expect(bootstrap({})).not.toHaveBeenCalled()
+    const invalid = bootstrap({ current: 'legacy' })
+    expect(invalid).not.toHaveBeenCalled()
+    expect(invalid.shouldUseConsumer?.('/pricing')).toBe(false)
     expect(document.cookie).toBe('')
   })
 

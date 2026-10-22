@@ -40,7 +40,7 @@ describe('consumer development gateway', () => {
       }
       if (
         enabled &&
-        !req.headers.cookie?.includes('factory_frontend=legacy') &&
+        req.headers.cookie?.includes('factory_frontend=consumer') &&
         path.startsWith('/pricing')
       ) {
         res.writeHead(307, { Location: '/explore?group=vip' })
@@ -54,7 +54,7 @@ describe('consumer development gateway', () => {
       const consumer =
         enabled &&
         (path.startsWith('/app/oauth/') ||
-          (!req.headers.cookie?.includes('factory_frontend=legacy') &&
+          (req.headers.cookie?.includes('factory_frontend=consumer') &&
             ['/', '/keys', '/wallet', '/plans'].includes(path.split('?')[0])))
       res.setHeader('X-Factory-Frontend', consumer ? 'consumer' : 'legacy')
       res.end(`backend:${consumer ? 'consumer' : 'legacy'}:${path}`)
@@ -105,8 +105,21 @@ describe('consumer development gateway', () => {
     },
   )
 
+  it.each(['', 'factory_frontend=invalid'])(
+    'defaults to backend legacy HTML without a valid saved preference (%s)',
+    async (cookie) => {
+      const response = await fetch(origin + '/', {
+        headers: cookie ? { Cookie: cookie } : undefined,
+      })
+      expect(await response.text()).toBe('backend:legacy:/')
+      expect(response.headers.get('set-cookie')).toBeNull()
+    },
+  )
+
   it('keeps consumer HTML and assets on the hot development server', async () => {
-    const response = await fetch(origin + '/')
+    const response = await fetch(origin + '/', {
+      headers: { Cookie: 'factory_frontend=consumer' },
+    })
     const html = await response.text()
     expect(html).toContain('Consumer dev fixture')
     expect(html).not.toContain('backend:consumer')
@@ -193,7 +206,10 @@ describe('consumer development gateway', () => {
     ['/studio', '/image-studio'],
     ['/pricing?group=vip', '/explore?group=vip'],
   ])('preserves backend redirect from %s', async (path, target) => {
-    const response = await fetch(origin + path, { redirect: 'manual' })
+    const response = await fetch(origin + path, {
+      redirect: 'manual',
+      headers: { Cookie: 'factory_frontend=consumer' },
+    })
     expect(response.status).toBe(307)
     expect(response.headers.get('location')).toBe(target)
   })

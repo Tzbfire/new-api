@@ -30,7 +30,7 @@
       var match = document.cookie.match(/(?:^|;\s*)factory_frontend=(consumer|legacy)(?:;|$)/);
       if (match) choice = match[1];
     } catch {}
-    if (choice === "legacy") return false;
+    if (choice !== "consumer") return false;
     try {
       var target = new URL(href, window.location.origin);
       if (target.origin !== window.location.origin || !consumerPath(target.pathname)) return false;

@@ -181,7 +181,7 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                         <FormLabel>{t('Enable new user interface')}</FormLabel>
                         <FormDescription>
                           {t(
-                            'Users enter the new interface by default and can switch from the legacy interface. Administration stays unchanged.'
+                            'Users keep the legacy interface by default and can choose to try the new interface. Their selection is remembered, and administration stays unchanged.'
                           )}
                         </FormDescription>
                         {status?.frontend_available === false && (
