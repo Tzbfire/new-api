@@ -27,7 +27,7 @@ import { Pagination } from '@/components/pagination'
 import { SearchSelect } from '@/components/search-select'
 import { DateTimePicker } from '@/components/date-time-picker'
 import { SpendingChart } from './SpendingChart'
-import { RequestDetails } from './RequestDetails'
+import { RequestDetails, RequestStatus } from './RequestDetails'
 import './usage.css'
 
 export interface UsageLog {
@@ -77,7 +77,7 @@ export default function UsagePage(props: {
     token: '',
     tokenID: props.initialTokenId,
     requestID: props.initialRequestId || '',
-    type: props.initialTokenId ? '0' : '2',
+    type: '0',
     from: '',
     until: '',
   })
@@ -108,26 +108,31 @@ export default function UsagePage(props: {
     request_id: filters.requestID,
   })
   if (filters.tokenID) params.set('token_id', String(filters.tokenID))
-  const logs = useQuery({
+  const logs = useQuery<UsagePageData>({
     queryKey: ['usage-logs', page, pageSize, params.toString(), session.user?.id],
     placeholderData: (previous, query) =>
       query?.queryKey[3] === params.toString() && query.queryKey[4] === session.user?.id
         ? keepPreviousData(previous)
         : undefined,
-    queryFn: () =>
-      request<UsagePageData>(`/api/log/self?p=${page}&page_size=${pageSize}&${params}`),
+    queryFn: ({ signal }) =>
+      request<UsagePageData>(
+        `/api/log/self?p=${page}&page_size=${pageSize}&${params}&request_only=true`,
+        { signal },
+      ),
   })
   const statsParams = new URLSearchParams(params)
   statsParams.set('type', '2')
   statsParams.delete('request_id')
   const stats = useQuery({
     queryKey: ['usage-stats', statsParams.toString(), session.user?.id],
-    queryFn: () => request<UsageStats>(`/api/log/self/stat?${statsParams}`),
+    queryFn: ({ signal }) => request<UsageStats>(`/api/log/self/stat?${statsParams}`, { signal }),
   })
   const history = useQuery({
     queryKey: ['usage-history', start, end, session.user?.id],
-    queryFn: () =>
-      request<UsagePoint[]>(`/api/data/self?start_timestamp=${start}&end_timestamp=${end}`),
+    queryFn: ({ signal }) =>
+      request<UsagePoint[]>(`/api/data/self?start_timestamp=${start}&end_timestamp=${end}`, {
+        signal,
+      }),
     enabled: site.data?.enable_data_export === true && !filters.tokenID,
   })
   const daily = useMemo(
@@ -166,17 +171,6 @@ export default function UsagePage(props: {
         : filters.token,
     },
     { label: 'Request ID', value: filters.requestID },
-    {
-      label: 'Record type',
-      value:
-        filters.type === '2'
-          ? ''
-          : t(
-              (
-                { '0': 'All record types', '5': 'Errors', '6': 'Refunds' } as Record<string, string>
-              )[filters.type] || 'Other',
-            ),
-    },
   ].filter((filter) => filter.value)
   const pageCache = (logs.data?.items || [])
     .filter((log) => log.type === 2)
@@ -281,6 +275,18 @@ export default function UsagePage(props: {
               onValueChange={(model) => setDraft({ ...draft, model })}
               options={modelOptions}
             />
+            <Field label={t('Record type')}>
+              <Select
+                value={draft.type}
+                onValueChange={(value) => setDraft({ ...draft, type: value })}
+                options={[
+                  { value: '0', label: t('All record types') },
+                  { value: '2', label: t('Consumption') },
+                  { value: '5', label: t('Errors') },
+                  { value: '6', label: t('Refunds') },
+                ]}
+              />
+            </Field>
             <div className="usage-filter-actions">
               <Button type="submit">{t('Apply filters')}</Button>
               <Button
@@ -303,7 +309,7 @@ export default function UsagePage(props: {
                     token: '',
                     tokenID: undefined,
                     requestID: '',
-                    type: '2',
+                    type: '0',
                     from: '',
                     until: '',
                   }
@@ -353,18 +359,6 @@ export default function UsagePage(props: {
                 <Input
                   value={draft.requestID}
                   onChange={(event) => setDraft({ ...draft, requestID: event.target.value })}
-                />
-              </Field>
-              <Field label={t('Record type')}>
-                <Select
-                  value={draft.type}
-                  onValueChange={(value) => setDraft({ ...draft, type: value })}
-                  options={[
-                    { value: '0', label: t('All record types') },
-                    { value: '2', label: t('Consumption') },
-                    { value: '5', label: t('Errors') },
-                    { value: '6', label: t('Refunds') },
-                  ]}
                 />
               </Field>
             </div>
@@ -585,85 +579,80 @@ export default function UsagePage(props: {
                         </span>
                         <div className="usage-record-tags">
                           <Badge>{log.group}</Badge>
-                          <Badge>
-                            {t(
-                              (
-                                { 2: 'Consumption', 5: 'Errors', 6: 'Refunds' } as Record<
-                                  number,
-                                  string
-                                >
-                              )[log.type || 2] || 'Other',
-                            )}
-                          </Badge>
+                          <RequestStatus log={log} />
                           <span title={log.token_name}>{log.token_name || t('Website')}</span>
                         </div>
                       </div>
                     </td>
                     <td data-label={t('Usage quantity')}>
                       <div className="usage-record-metrics">
-                        {metric.kind === 'images' ? (
-                          <>
-                            <strong>
-                              {metric.count === undefined
-                                ? t('Image count not recorded')
-                                : t('{{count}} images', {
-                                    count: formatNumber(metric.count, locale),
-                                  })}
-                            </strong>
-                            <span>
-                              {t('Total duration')}:{' '}
-                              {formatDurationMilliseconds(
-                                timing.duration === undefined ? undefined : timing.duration * 1000,
-                                locale,
-                              )}
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <strong>
-                              {t('Input / output tokens')}:{' '}
-                              {formatNumber(cache?.total ?? log.prompt_tokens, locale)} /{' '}
-                              {formatNumber(log.completion_tokens, locale)}
-                            </strong>
-                            <span>
-                              {t('Cache read tokens')}:{' '}
-                              {cache?.read === undefined
-                                ? t('Not recorded')
-                                : formatNumber(cache.read, locale)}
-                              {cache?.share !== undefined &&
-                                ` · ${formatNumber(cache.share, locale, { maximumFractionDigits: 1 })}%`}
-                            </span>
-                            {cache?.write !== undefined && (
+                        {log.type !== 2 && <span>—</span>}
+                        {log.type === 2 &&
+                          (metric.kind === 'images' ? (
+                            <>
+                              <strong>
+                                {metric.count === undefined
+                                  ? t('Image count not recorded')
+                                  : t('{{count}} images', {
+                                      count: formatNumber(metric.count, locale),
+                                    })}
+                              </strong>
                               <span>
-                                {t('Cache write tokens')}: {formatNumber(cache.write, locale)}
+                                {t('Total duration')}:{' '}
+                                {formatDurationMilliseconds(
+                                  timing.duration === undefined
+                                    ? undefined
+                                    : timing.duration * 1000,
+                                  locale,
+                                )}
                               </span>
-                            )}
-                            <span
-                              title={t(
-                                'Speed includes waiting time; only streamed text with recorded output and duration is measured.',
+                            </>
+                          ) : (
+                            <>
+                              <strong>
+                                {t('Input / output tokens')}:{' '}
+                                {formatNumber(cache?.total ?? log.prompt_tokens, locale)} /{' '}
+                                {formatNumber(log.completion_tokens, locale)}
+                              </strong>
+                              <span>
+                                {t('Cache read tokens')}:{' '}
+                                {cache?.read === undefined
+                                  ? t('Not recorded')
+                                  : formatNumber(cache.read, locale)}
+                                {cache?.share !== undefined &&
+                                  ` · ${formatNumber(cache.share, locale, { maximumFractionDigits: 1 })}%`}
+                              </span>
+                              {cache?.write !== undefined && (
+                                <span>
+                                  {t('Cache write tokens')}: {formatNumber(cache.write, locale)}
+                                </span>
                               )}
-                            >
-                              {t('Average output speed')}:{' '}
-                              {timing.tokensPerSecond === undefined
-                                ? '—'
-                                : `${formatNumber(timing.tokensPerSecond, locale, { maximumFractionDigits: 2 })} token/s`}
-                              {timing.tokensPerSecond === undefined &&
-                                log.completion_tokens === 0 &&
-                                ` · ${t('No output tokens recorded')}`}
-                            </span>
-                            <span>
-                              {t('First response latency')}:{' '}
-                              {timing.firstResponse === undefined
-                                ? t('Not recorded')
-                                : formatDurationMilliseconds(timing.firstResponse * 1000, locale)}
-                              {' · '}
-                              {t('Total duration')}:{' '}
-                              {timing.duration === undefined
-                                ? t('Not recorded')
-                                : formatDurationMilliseconds(timing.duration * 1000, locale)}
-                            </span>
-                          </>
-                        )}
+                              <span
+                                title={t(
+                                  'Speed includes waiting time; only streamed text with recorded output and duration is measured.',
+                                )}
+                              >
+                                {t('Average output speed')}:{' '}
+                                {timing.tokensPerSecond === undefined
+                                  ? '—'
+                                  : `${formatNumber(timing.tokensPerSecond, locale, { maximumFractionDigits: 2 })} token/s`}
+                                {timing.tokensPerSecond === undefined &&
+                                  log.completion_tokens === 0 &&
+                                  ` · ${t('No output tokens recorded')}`}
+                              </span>
+                              <span>
+                                {t('First response latency')}:{' '}
+                                {timing.firstResponse === undefined
+                                  ? t('Not recorded')
+                                  : formatDurationMilliseconds(timing.firstResponse * 1000, locale)}
+                                {' · '}
+                                {t('Total duration')}:{' '}
+                                {timing.duration === undefined
+                                  ? t('Not recorded')
+                                  : formatDurationMilliseconds(timing.duration * 1000, locale)}
+                              </span>
+                            </>
+                          ))}
                       </div>
                     </td>
                     <td data-label={t('Cost')} className="usage-record-cost">

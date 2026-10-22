@@ -300,6 +300,53 @@
   overflow-wrap: anywhere;
   font-size: 12px;
 }
+.usage-request-status {
+  gap: 5px;
+  flex-shrink: 0;
+  font-weight: 600;
+}
+.usage-request-status[data-request-state='consumption'],
+.usage-request-status[data-request-state='completed'] {
+  color: #286443;
+  background: var(--green);
+  border-color: color-mix(in srgb, currentColor 22%, var(--border));
+}
+:root[data-theme='dark'] .usage-request-status[data-request-state='consumption'],
+:root[data-theme='dark'] .usage-request-status[data-request-state='completed'] {
+  color: #b2d6bc;
+}
+.usage-request-status[data-request-state='error'],
+.usage-request-status[data-request-state='interrupted'] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+}
+.usage-request-status[data-request-state='refund'] {
+  background: var(--purple);
+}
+.usage-record-table tr:has([data-request-state='error']),
+.usage-record-table tr:has([data-request-state='interrupted']) {
+  background: color-mix(in srgb, var(--danger) 3%, var(--surface));
+}
+.usage-record-table tr:has([data-request-state='error']) td:first-child,
+.usage-record-table tr:has([data-request-state='interrupted']) td:first-child {
+  box-shadow: inset 3px 0 color-mix(in srgb, var(--danger) 60%, transparent);
+  padding-inline-start: 14px;
+}
+.request-failure-details {
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--danger) 5%, var(--surface));
+  padding: 12px 14px;
+  overflow-wrap: anywhere;
+}
+.request-failure-details > strong {
+  color: var(--danger);
+}
+.request-failure-details p {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+}
 .usage-record-metrics {
   display: flex;
   flex-direction: column;

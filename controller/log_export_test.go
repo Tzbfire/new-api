@@ -351,3 +351,151 @@ func TestLogTokenFilterDatabaseMatrix(t *testing.T) {
 		})
 	}
 }
+
+func TestUserLogIndexMigrationDatabaseMatrix(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, database := range []struct {
+		kind, env string
+		typ       common.DatabaseType
+	}{
+		{"sqlite", "", common.DatabaseTypeSQLite},
+		{"mysql", "AUDIT_MYSQL_DSN", common.DatabaseTypeMySQL},
+		{"postgres", "AUDIT_POSTGRES_DSN", common.DatabaseTypePostgreSQL},
+	} {
+		t.Run(database.kind, func(t *testing.T) {
+			dsn := os.Getenv(database.env)
+			if database.env != "" && dsn == "" {
+				t.Skip(database.env + " is not configured")
+			}
+			for _, upgrade := range []bool{false, true} {
+				for _, separateLogDB := range []bool{false, true} {
+					t.Run(fmt.Sprintf("upgrade=%v/separate-log=%v", upgrade, separateLogDB), func(t *testing.T) {
+						logDB, _ := newAuditTestDatabase(t, database.kind, dsn)
+						mainDB, mainType := logDB, database.typ
+						if separateLogDB {
+							mainDB, _ = newAuditTestDatabase(t, "sqlite", "")
+							mainType = common.DatabaseTypeSQLite
+						}
+						useLogExportDatabases(t, mainDB, logDB, mainType, database.typ)
+						versionSQL := "SELECT version()"
+						if database.kind == "sqlite" {
+							versionSQL = "SELECT sqlite_version()"
+						}
+						var version string
+						require.NoError(t, logDB.Raw(versionSQL).Scan(&version).Error)
+						t.Logf("log index migration database: %s %s", database.kind, version)
+						if upgrade {
+							require.NoError(t, logDB.AutoMigrate(&releasedAuditLog{}))
+							assert.False(t, logDB.Migrator().HasIndex(&model.Log{}, "idx_logs_user_created_type"))
+						} else {
+							require.NoError(t, logDB.AutoMigrate(&model.Log{}))
+						}
+						previousIndexes, err := logDB.Migrator().GetIndexes(&model.Log{})
+						require.NoError(t, err)
+						now := time.Now().Unix()
+						logs := []model.Log{
+							{UserId: 1, CreatedAt: now - 3600, Type: model.LogTypeConsume, TokenId: 11, ModelName: "chat-a", Quota: 10, RequestId: "migration-first"},
+							{UserId: 1, CreatedAt: now - 1800, Type: model.LogTypeError, TokenId: 11, ModelName: "chat-a", RequestId: "migration-failed"},
+							{UserId: 2, CreatedAt: now - 1200, Type: model.LogTypeConsume, TokenId: 21, Quota: 100, RequestId: "migration-foreign"},
+							{UserId: 1, CreatedAt: now - 600, Type: model.LogTypeConsume, TokenId: 12, ModelName: "chat-b", Quota: 20, RequestId: "migration-last"},
+							{UserId: 1, CreatedAt: now - 10*86400, Type: model.LogTypeConsume, Quota: 50, RequestId: "migration-old"},
+							{UserId: 1, CreatedAt: now - 500, Type: model.LogTypeTopup, Quota: 1000, RequestId: "migration-topup"},
+							{UserId: 1, CreatedAt: now - 400, Type: model.LogTypeManage, RequestId: "migration-manage"},
+							{UserId: 1, CreatedAt: now - 300, Type: model.LogTypeSystem, RequestId: "migration-system"},
+							{UserId: 1, CreatedAt: now - 200, Type: model.LogTypeLogin, RequestId: "migration-login"},
+							{UserId: 1, CreatedAt: now - 100, Type: model.LogTypeRefund, RequestId: "migration-refund"},
+						}
+						require.NoError(t, logDB.Create(&logs).Error)
+						for range 2 {
+							require.NoError(t, logDB.AutoMigrate(&model.Log{}))
+							indexes, err := logDB.Migrator().GetIndexes(&model.Log{})
+							require.NoError(t, err)
+							byName := make(map[string]gorm.Index, len(indexes))
+							for _, index := range indexes {
+								byName[index.Name()] = index
+								if index.Name() == "idx_logs_user_created_type" {
+									if database.typ == common.DatabaseTypePostgreSQL {
+										// The PostgreSQL driver's GetIndexes does not preserve column order.
+										var definition string
+										require.NoError(t, logDB.Raw("SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND tablename = ? AND indexname = ?", "logs", index.Name()).Scan(&definition).Error)
+										assert.Contains(t, definition, "(user_id, created_at, type)")
+									} else {
+										assert.Equal(t, []string{"user_id", "created_at", "type"}, index.Columns())
+									}
+								}
+							}
+							require.Contains(t, byName, "idx_logs_user_created_type")
+							for _, index := range previousIndexes {
+								require.Contains(t, byName, index.Name())
+								assert.ElementsMatch(t, index.Columns(), byName[index.Name()].Columns())
+								before, beforeOK := index.Unique()
+								after, afterOK := byName[index.Name()].Unique()
+								assert.Equal(t, beforeOK, afterOK)
+								assert.Equal(t, before, after)
+							}
+							var preserved []model.Log
+							require.NoError(t, logDB.Order("id").Find(&preserved).Error)
+							assert.Equal(t, logs, preserved)
+						}
+						period := fmt.Sprintf("start_timestamp=%d&end_timestamp=%d", now-7200, now)
+						for _, tc := range []struct {
+							query string
+							total int
+							ids   []string
+						}{
+							{"&p=2&page_size=2", 8, []string{"migration-system", "migration-manage"}},
+							{"&request_only=false", 8, []string{"migration-refund", "migration-login", "migration-system", "migration-manage", "migration-topup", "migration-last", "migration-failed", "migration-first"}},
+							{"&request_only=true", 4, []string{"migration-refund", "migration-last", "migration-failed", "migration-first"}},
+							{"&request_only=true&p=2&page_size=2", 4, []string{"migration-failed", "migration-first"}},
+							{"&request_only=true&type=5", 1, []string{"migration-failed"}},
+							{"&request_only=true&type=6", 1, []string{"migration-refund"}},
+							{"&request_only=true&type=1", 0, []string{}},
+							{"&type=2", 2, []string{"migration-last", "migration-first"}},
+							{"&type=5", 1, []string{"migration-failed"}},
+							{"&token_id=11&model_name=chat-a", 2, []string{"migration-failed", "migration-first"}},
+							{"&token_id=21", 0, []string{}},
+						} {
+							response := callLogHandler(t, GetUserLogs, 1, common.RoleCommonUser, period+tc.query)[0]
+							require.Equal(t, true, response["success"])
+							data := response["data"].(map[string]any)
+							assert.EqualValues(t, tc.total, data["total"])
+							ids := make([]string, 0)
+							for _, item := range data["items"].([]any) {
+								ids = append(ids, item.(map[string]any)["request_id"].(string))
+							}
+							assert.Equal(t, tc.ids, ids)
+						}
+						for _, value := range []string{"", "invalid", "true&request_only=false"} {
+							response := callLogHandler(t, GetUserLogs, 1, common.RoleCommonUser, period+"&request_only="+value)[0]
+							assert.Equal(t, false, response["success"], value)
+							assert.Equal(t, "Invalid parameters", response["message_key"], value)
+						}
+						stat := callLogHandler(t, GetLogsSelfStat, 1, common.RoleCommonUser, period)[0]
+						require.Equal(t, true, stat["success"])
+						assert.EqualValues(t, 30, stat["data"].(map[string]any)["quota"])
+						ctx, cancel := context.WithCancel(context.Background())
+						cancel()
+						_, _, err = model.GetUserLogsWithContext(ctx, 1, model.LogFilter{}, 0, 20)
+						require.Error(t, err, "canceled records queries must reach the database context")
+						_, err = model.SumUsedQuotaWithContext(ctx, model.LogFilter{}, 1)
+						require.Error(t, err, "canceled statistics queries must reach the database context")
+						for _, handler := range []gin.HandlerFunc{GetUserLogs, GetLogsSelfStat} {
+							recorder := httptest.NewRecorder()
+							requestContext, _ := gin.CreateTestContext(recorder)
+							requestContext.Request = httptest.NewRequest(http.MethodGet, "/api/log/self?"+period, nil).WithContext(ctx)
+							requestContext.Set("id", 1)
+							requestContext.Set("role", common.RoleCommonUser)
+							handler(requestContext)
+							var response map[string]any
+							require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+							assert.Equal(t, false, response["success"], "HTTP request cancellation must propagate to database queries")
+						}
+						_, total, err := model.GetUserLogs(1, model.LogFilter{}, 0, 20)
+						require.NoError(t, err)
+						assert.EqualValues(t, 9, total, "cancellation must not poison later requests")
+					})
+				}
+			}
+		})
+	}
+}

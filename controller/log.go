@@ -29,6 +29,16 @@ func logFilterFromQuery(c *gin.Context, admin bool) (model.LogFilter, error) {
 		RequestId:         c.Query("request_id"),
 		UpstreamRequestId: c.Query("upstream_request_id"),
 	}
+	if values, present := c.Request.URL.Query()["request_only"]; present {
+		if len(values) != 1 {
+			return filter, common.NewMessage("Invalid parameters")
+		}
+		requestOnly, err := strconv.ParseBool(values[0])
+		if err != nil {
+			return filter, common.NewMessage("Invalid parameters")
+		}
+		filter.RequestOnly = requestOnly
+	}
 	if values, present := c.Request.URL.Query()["token_id"]; present {
 		if len(values) != 1 {
 			return filter, common.NewMessage("Invalid parameters")
@@ -102,7 +112,7 @@ func GetUserLogs(c *gin.Context) {
 		}
 		filter.StartTimestamp = startTimestamp
 	}
-	logs, total, err := model.GetUserLogs(c.GetInt("id"), filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	logs, total, err := model.GetUserLogsWithContext(c.Request.Context(), c.GetInt("id"), filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -232,7 +242,7 @@ func GetLogsStat(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	stat, err := model.SumUsedQuota(filter, 0)
+	stat, err := model.SumUsedQuotaWithContext(c.Request.Context(), filter, 0)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -269,7 +279,7 @@ func GetLogsSelfStat(c *gin.Context) {
 			return
 		}
 	}
-	quotaNum, err := model.SumUsedQuota(filter, userID)
+	quotaNum, err := model.SumUsedQuotaWithContext(c.Request.Context(), filter, userID)
 	if err != nil {
 		common.ApiError(c, err)
 		return

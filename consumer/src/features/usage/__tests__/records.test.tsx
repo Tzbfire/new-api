@@ -24,7 +24,7 @@ async function renderUsage(
   record?: Partial<UsageLog>,
   initialKey?: { id: number; name: string },
 ) {
-  const fetch = vi.fn(async (path: string) => {
+  const fetch = vi.fn(async (path: string, _options?: RequestInit) => {
     const url = new URL(path, 'http://localhost')
     let data: unknown = {}
     if (url.pathname === '/api/status')
@@ -33,8 +33,7 @@ async function renderUsage(
       (url.pathname === '/api/log/self/stat' || url.pathname === '/api/data/self') &&
       pendingSummary &&
       (url.searchParams.get('model_name') === 'changed' ||
-        (url.pathname === '/api/data/self' &&
-          url.searchParams.get('start_timestamp') &&
+        (url.searchParams.get('start_timestamp') &&
           Number(url.searchParams.get('end_timestamp')) -
             Number(url.searchParams.get('start_timestamp')) <
             2 * 86400))
@@ -166,6 +165,7 @@ it('keeps common filters visible and preserves applied secondary filters while c
   expect(screen.getByRole('combobox', { name: 'Time period' })).toBeVisible()
   expect(screen.getByRole('combobox', { name: 'Service group' })).toBeVisible()
   expect(screen.getByRole('combobox', { name: 'Model' })).toBeVisible()
+  expect(screen.getByRole('combobox', { name: 'Record type' })).toBeVisible()
   expect(screen.queryByRole('textbox', { name: 'Request ID' })).not.toBeInTheDocument()
   const more = screen.getByRole('button', { name: 'More filters' })
   expect(more).toHaveAttribute('aria-expanded', 'false')
@@ -182,6 +182,97 @@ it('keeps common filters visible and preserves applied secondary filters while c
   expect(screen.queryByRole('region', { name: 'Applied filters' })).not.toBeInTheDocument()
   expect(screen.getByRole('textbox', { name: 'Request ID' })).toHaveValue('')
 })
+
+it('includes failures in the default history and exposes a persistent record-type filter', async () => {
+  const fetch = await renderUsage()
+  await screen.findByText('fixture-chat')
+  const firstRead = fetch.mock.calls
+    .map(([path]) => new URL(path, 'http://localhost'))
+    .find((url) => url.pathname === '/api/log/self')!
+  expect(firstRead.searchParams.get('type')).toBe('0')
+  expect(firstRead.searchParams.get('request_only')).toBe('true')
+  expect(
+    fetch.mock.calls
+      .map(([path]) => new URL(path, 'http://localhost'))
+      .filter((url) => url.pathname === '/api/log/self/stat')
+      .every(
+        (url) => url.searchParams.get('type') === '2' && !url.searchParams.has('request_only'),
+      ),
+  ).toBe(true)
+  const user = userEvent.setup()
+  await user.click(screen.getByRole('combobox', { name: 'Record type' }))
+  await user.click(await screen.findByRole('option', { name: 'Errors' }))
+  await user.click(screen.getByRole('button', { name: 'Apply filters' }))
+  await waitFor(() =>
+    expect(
+      fetch.mock.calls.some(([path]) => {
+        const url = new URL(path, 'http://localhost')
+        return url.pathname === '/api/log/self' && url.searchParams.get('type') === '5'
+      }),
+    ).toBe(true),
+  )
+  await user.click(screen.getByRole('button', { name: 'Reset filters' }))
+  expect(screen.getByRole('combobox', { name: 'Record type' })).toHaveTextContent(
+    'All record types',
+  )
+})
+
+it.each([
+  { type: 2, other: '{}', label: 'Consumption', state: 'consumption' },
+  { type: 5, other: '{}', label: 'Errors', state: 'error' },
+  { type: 6, other: '{}', label: 'Refunds', state: 'refund' },
+  { type: 2, other: '{"stream_status":{"status":"ok"}}', label: 'Completed', state: 'completed' },
+  {
+    type: 2,
+    other: '{"stream_status":{"status":"error"}}',
+    label: 'Interrupted',
+    state: 'interrupted',
+  },
+  { type: 9, other: '{}', label: 'Other', state: 'other' },
+])(
+  'labels $state records explicitly in the list and details',
+  async ({ type, other, label, state }) => {
+    await renderUsage(undefined, undefined, undefined, undefined, {
+      type,
+      other,
+      content: 'Public request error',
+    })
+    const row = await screen.findByRole('row', { name: /fixture-chat/ })
+    const status = within(row).getAllByText(label)[0]!
+    expect(status).toHaveAttribute('data-request-state', state)
+    expect(status).toBeVisible()
+    expect(status.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    if (type !== 2) {
+      expect(within(row).queryByText(/Input \/ output tokens/)).not.toBeInTheDocument()
+      expect(within(row).queryByText(/Cache read tokens/)).not.toBeInTheDocument()
+      expect(within(row).queryByText(/Average output speed/)).not.toBeInTheDocument()
+    }
+    await userEvent.setup().click(within(row).getByRole('button', { name: 'View' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Request details' })
+    expect(within(dialog).getByText(label)).toBeVisible()
+    if (type !== 2) {
+      expect(within(dialog).queryByRole('region', { name: 'Token usage' })).not.toBeInTheDocument()
+      expect(within(dialog).queryByText('Billing details')).not.toBeInTheDocument()
+    }
+    if (type !== 2 && type !== 5) {
+      expect(
+        within(dialog).queryByRole('region', { name: 'Response performance' }),
+      ).not.toBeInTheDocument()
+    }
+    if (type === 5) {
+      expect(within(dialog).getByRole('region', { name: 'Error details' })).toHaveTextContent(
+        'Public request error',
+      )
+      expect(within(dialog).getByRole('region', { name: 'Response performance' })).toBeVisible()
+      expect(
+        within(dialog).getByText(
+          'An automatic retry may succeed. This error record does not determine the final request outcome.',
+        ),
+      ).toBeVisible()
+      expect(within(dialog).queryByText('Failed')).not.toBeInTheDocument()
+    }
+  },
+)
 
 it('shows public cache and billing details without exposing privileged metadata', async () => {
   await renderUsage()
@@ -503,4 +594,56 @@ it('keeps the spending shell but removes previous-range chart values until the n
   await waitFor(() =>
     expect(within(chart).getByRole('group', { name: 'Daily spending chart' })).toBeVisible(),
   )
+})
+
+it('cancels a pending records query when the user applies a different filter', async () => {
+  let finish!: () => void
+  const delayed = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  const fetch = await renderUsage(undefined, undefined, delayed)
+  await screen.findByText('fixture-chat')
+  const user = userEvent.setup()
+  await user.click(screen.getByRole('button', { name: 'More filters' }))
+  await user.type(screen.getByRole('textbox', { name: 'Request ID' }), 'changed-filter')
+  await user.click(screen.getByRole('button', { name: 'Apply filters' }))
+  const pending = fetch.mock.calls.find(
+    ([path]) => path.startsWith('/api/log/self?') && path.includes('request_id=changed-filter'),
+  )
+  expect(pending).toBeDefined()
+  const signal = pending?.[1]?.signal
+  expect(signal).toBeInstanceOf(AbortSignal)
+  expect(signal?.aborted).toBe(false)
+  await user.clear(screen.getByRole('textbox', { name: 'Request ID' }))
+  await user.type(screen.getByRole('textbox', { name: 'Request ID' }), 'latest-filter')
+  await user.click(screen.getByRole('button', { name: 'Apply filters' }))
+  expect(signal?.aborted).toBe(true)
+  await screen.findByText('fixture-chat')
+  finish()
+})
+
+it('cancels pending spending and chart queries when their filters are replaced', async () => {
+  let finish!: () => void
+  const delayed = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  const fetch = await renderUsage(undefined, undefined, undefined, delayed)
+  await screen.findByText('fixture-chat')
+  const user = userEvent.setup()
+  await user.click(screen.getByRole('combobox', { name: 'Time period' }))
+  await user.click(await screen.findByRole('option', { name: 'Last 24 hours' }))
+  await user.click(screen.getByRole('button', { name: 'Apply filters' }))
+  const reads = fetch.mock.calls.filter(
+    ([path]) => path.startsWith('/api/log/self/stat?') || path.startsWith('/api/data/self?'),
+  )
+  const summarySignals = reads.slice(-2).map(([, options]) => options?.signal)
+  expect(summarySignals).toHaveLength(2)
+  expect(summarySignals.every((signal) => signal instanceof AbortSignal && !signal.aborted)).toBe(
+    true,
+  )
+  await user.click(screen.getByRole('combobox', { name: 'Time period' }))
+  await user.click(await screen.findByRole('option', { name: 'Last 7 days' }))
+  await user.click(screen.getByRole('button', { name: 'Apply filters' }))
+  expect(summarySignals.every((signal) => signal?.aborted)).toBe(true)
+  finish()
 })

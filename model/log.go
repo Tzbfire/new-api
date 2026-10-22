@@ -56,9 +56,9 @@ func sanitizeClickHouseLikePattern(input string) (string, error) {
 
 type Log struct {
 	Id                int    `json:"id" gorm:"index:idx_created_at_id,priority:2;index:idx_user_id_id,priority:2"`
-	UserId            int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
-	CreatedAt         int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:1;index:idx_created_at_type"`
-	Type              int    `json:"type" gorm:"index:idx_created_at_type"`
+	UserId            int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1;index:idx_logs_user_created_type,priority:1"`
+	CreatedAt         int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:1;index:idx_created_at_type;index:idx_logs_user_created_type,priority:2"`
+	Type              int    `json:"type" gorm:"index:idx_created_at_type;index:idx_logs_user_created_type,priority:3"`
 	Content           string `json:"content"`
 	Username          string `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
 	TokenName         string `json:"token_name" gorm:"index;default:''"`
@@ -468,6 +468,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 // Username and Channel are administrator filters.
 type LogFilter struct {
 	Type              int
+	RequestOnly       bool
 	StartTimestamp    int64
 	EndTimestamp      int64
 	ModelName         string
@@ -482,6 +483,9 @@ type LogFilter struct {
 
 func (f LogFilter) apply(tx *gorm.DB) (*gorm.DB, error) {
 	var err error
+	if f.RequestOnly {
+		tx = tx.Where("logs.type IN ?", []int{LogTypeConsume, LogTypeError, LogTypeRefund})
+	}
 	if f.Type != LogTypeUnknown {
 		tx = tx.Where("logs.type = ?", f.Type)
 	}
@@ -585,7 +589,11 @@ func GetAllLogs(filter LogFilter, startIdx int, num int) (logs []*Log, total int
 const logSearchCountLimit = 10000
 
 func GetUserLogs(userId int, filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
-	tx, err := filter.apply(LOG_DB.Where("logs.user_id = ?", userId))
+	return GetUserLogsWithContext(context.Background(), userId, filter, startIdx, num)
+}
+
+func GetUserLogsWithContext(ctx context.Context, userId int, filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
+	tx, err := filter.apply(LOG_DB.WithContext(ctx).Where("logs.user_id = ?", userId))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -682,7 +690,11 @@ type Stat struct {
 }
 
 func SumUsedQuota(filter LogFilter, userId int) (stat Stat, err error) {
-	base := LOG_DB.Table("logs")
+	return SumUsedQuotaWithContext(context.Background(), filter, userId)
+}
+
+func SumUsedQuotaWithContext(ctx context.Context, filter LogFilter, userId int) (stat Stat, err error) {
+	base := LOG_DB.WithContext(ctx).Table("logs")
 	if userId != 0 {
 		base = base.Where("logs.user_id = ?", userId)
 	}
