@@ -3,14 +3,13 @@ import LanguageDetector from 'i18next-browser-languagedetector'
 import { initReactI18next } from 'react-i18next'
 import en from './locales/en.json'
 import zh from './locales/zh.json'
-import { languages } from './languages'
+import { languages, toSupportedLanguage } from './languages'
 
 const languageDetector = new LanguageDetector()
 languageDetector.addDetector({
   name: 'deploymentDefault',
   lookup() {
-    const language = process.env.PUBLIC_DEFAULT_LANGUAGE
-    return languages.some(({ id }) => id === language) ? language : undefined
+    return toSupportedLanguage(process.env.PUBLIC_DEFAULT_LANGUAGE)
   },
 })
 languageDetector.addDetector({
@@ -55,7 +54,7 @@ void i18n
   .init({
     resources: { en, zh },
     partialBundledLanguages: true,
-    supportedLngs: ['en', 'zh', 'zh-TW', 'ja', 'fr', 'ru', 'vi'],
+    supportedLngs: languages.map(({ id }) => id),
     fallbackLng: 'en',
     load: 'currentOnly',
     keySeparator: false,
@@ -65,6 +64,7 @@ void i18n
       order: ['localStorage', 'legacyPreference', 'deploymentDefault', 'navigator'],
       lookupLocalStorage: 'new-api-consumer:language',
       caches: ['localStorage'],
+      convertDetectedLanguage: (language) => toSupportedLanguage(language) || language,
     },
   })
   .then(() => {

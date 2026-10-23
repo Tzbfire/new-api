@@ -47,7 +47,15 @@ describe('display locales and quota units', () => {
   )
 
   it('falls back safely for malformed interface locale values', () => {
-    for (const language of ['', 'not-a-supported-locale', 'bad_locale', undefined]) {
+    for (const language of [
+      '',
+      'not-a-supported-locale',
+      'bad_locale',
+      'constructor',
+      'toString',
+      '__proto__',
+      undefined,
+    ]) {
       expect(toIntlLocale(language)).toBe('en-US')
       expect(() => formatMoney(1, 'USD', language)).not.toThrow()
     }
