@@ -49,7 +49,25 @@ export function protocolBaseURL(address: string, protocol: 'openai' | 'native'):
   return protocol === 'openai' ? `${root}/v1` : root
 }
 
-export type CCSwitchApp = 'claude' | 'codex' | 'gemini'
+// CC Switch v4.0.18 provider imports. The application-management list is broader
+// than the provider deep-link allowlist; keep these aligned with its parser.
+export const ccSwitchApps = {
+  codex: { label: 'Codex', protocol: 'openai', apiFormat: 'openai_responses' },
+  claude: { label: 'Claude Code', protocol: 'native', apiFormat: 'anthropic' },
+  gemini: { label: 'Gemini CLI', protocol: 'native', apiFormat: 'gemini_native' },
+  agy: { label: 'Antigravity CLI', protocol: 'native', apiFormat: 'gemini_native' },
+  grokbuild: { label: 'Grok Build', protocol: 'openai', apiFormat: 'openai_responses' },
+  opencode: { label: 'OpenCode', protocol: 'openai', apiFormat: 'openai_chat' },
+  openclaw: { label: 'OpenClaw', protocol: 'openai', apiFormat: 'openai_chat' },
+  hermes: { label: 'Hermes', protocol: 'openai', apiFormat: 'openai_chat' },
+  pi: { label: 'Pi', protocol: 'openai', apiFormat: 'openai_chat' },
+} as const
+
+export type CCSwitchApp = keyof typeof ccSwitchApps
+
+export function ccSwitchBaseURL(address: string, app: CCSwitchApp): string {
+  return protocolBaseURL(address, ccSwitchApps[app].protocol)
+}
 
 export function ccSwitchLink(input: {
   app: CCSwitchApp
@@ -62,12 +80,10 @@ export function ccSwitchLink(input: {
     resource: 'provider',
     app: input.app,
     name: input.name,
-    endpoint: protocolBaseURL(input.address, input.app === 'codex' ? 'openai' : 'native'),
+    endpoint: ccSwitchBaseURL(input.address, input.app),
     apiKey: input.key.startsWith('sk-') ? input.key : `sk-${input.key}`,
     model: input.model,
-    apiFormat: { claude: 'anthropic', codex: 'openai_responses', gemini: 'gemini_native' }[
-      input.app
-    ],
+    apiFormat: ccSwitchApps[input.app].apiFormat,
     enabled: 'false',
   })
   return `ccswitch://v1/import?${params.toString()}`

@@ -10,7 +10,7 @@ import { useStatus } from '@/lib/status'
 import { useSiteBrand } from '@/lib/use-site-brand'
 import { useSession } from '@/lib/session'
 import { APIAddressSelector, useAPIAddress } from './APIAddressSelector'
-import { ccSwitchLink, protocolBaseURL, type CCSwitchApp } from './api-addresses'
+import { ccSwitchApps, ccSwitchBaseURL, ccSwitchLink, type CCSwitchApp } from './api-addresses'
 import type { APIKey } from './types'
 
 export function CCSwitchImport(props: { apiKey: APIKey; onClose: () => void }) {
@@ -96,18 +96,25 @@ export function CCSwitchImport(props: { apiKey: APIKey; onClose: () => void }) {
         <p className="field-hint">
           {t('Service group')}: {group} · {props.apiKey.name}
         </p>
-        <Field label={t('Application')}>
+        <Field
+          label={t('Application')}
+          hint={t('Use CC Switch {{version}} or later for all listed apps.', { version: '4.0.18' })}
+        >
           <Select
             value={app}
             disabled={locked}
             onValueChange={(value) => setApp(value as CCSwitchApp)}
-            options={[
-              { value: 'codex', label: 'Codex' },
-              { value: 'claude', label: 'Claude Code' },
-              { value: 'gemini', label: 'Gemini CLI' },
-            ]}
+            options={Object.entries(ccSwitchApps).map(([value, config]) => ({
+              value,
+              label: config.label,
+            }))}
           />
         </Field>
+        {app === 'agy' && (
+          <p className="field-hint">
+            {t('Launch Antigravity CLI from CC Switch after importing to use this provider.')}
+          </p>
+        )}
         <Field label={t('Connection name')}>
           <Input
             value={connectionName}
@@ -119,9 +126,7 @@ export function CCSwitchImport(props: { apiKey: APIKey; onClose: () => void }) {
         <APIAddressSelector disabled={locked} />
         {address && (
           <>
-            <code className="secret-code">
-              {protocolBaseURL(address.url, app === 'codex' ? 'openai' : 'native')}
-            </code>
+            <code className="secret-code">{ccSwitchBaseURL(address.url, app)}</code>
           </>
         )}
         <SearchSelect

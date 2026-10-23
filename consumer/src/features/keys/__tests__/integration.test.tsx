@@ -96,9 +96,19 @@ it('uses administrator addresses safely and preserves protocol prefixes', () => 
   expect(() => protocolBaseURL('https://api.test/?key=secret', 'openai')).toThrow()
 })
 
-it.each(['claude', 'codex', 'gemini'] as const)(
-  'encodes an explicit %s import without automatically enabling it',
-  (app) => {
+it.each([
+  ['claude', 'anthropic', 'https://api.test/proxy'],
+  ['codex', 'openai_responses', 'https://api.test/proxy/v1'],
+  ['gemini', 'gemini_native', 'https://api.test/proxy'],
+  ['agy', 'gemini_native', 'https://api.test/proxy'],
+  ['grokbuild', 'openai_responses', 'https://api.test/proxy/v1'],
+  ['opencode', 'openai_chat', 'https://api.test/proxy/v1'],
+  ['openclaw', 'openai_chat', 'https://api.test/proxy/v1'],
+  ['hermes', 'openai_chat', 'https://api.test/proxy/v1'],
+  ['pi', 'openai_chat', 'https://api.test/proxy/v1'],
+] as const)(
+  'encodes an explicit %s import using its official format without automatically enabling it',
+  (app, format, endpoint) => {
     const url = new URL(
       ccSwitchLink({
         app,
@@ -109,12 +119,16 @@ it.each(['claude', 'codex', 'gemini'] as const)(
       }),
     )
     expect(url.protocol).toBe('ccswitch:')
+    expect(url.host).toBe('v1')
+    expect(url.pathname).toBe('/import')
+    expect(url.searchParams.get('resource')).toBe('provider')
+    expect(url.searchParams.get('app')).toBe(app)
+    expect(url.searchParams.get('name')).toBe('Example & 测试')
+    expect(url.searchParams.get('apiFormat')).toBe(format)
     expect(url.searchParams.get('model')).toBe('model&version=1')
     expect(url.searchParams.get('apiKey')).toBe('sk-synthetic-only')
     expect(url.searchParams.get('enabled')).toBe('false')
-    expect(url.searchParams.get('endpoint')).toBe(
-      app === 'codex' ? 'https://api.test/proxy/v1' : 'https://api.test/proxy',
-    )
+    expect(url.searchParams.get('endpoint')).toBe(endpoint)
   },
 )
 
@@ -200,9 +214,12 @@ it('offers every permitted text model and keeps the choice when switching target
   const fetcher = vi.fn(async (path: string) => {
     if (path === '/api/user/models?group=premium')
       return Response.json({ success: true, data: names })
+    if (path === '/api/token/4/key')
+      return Response.json({ success: true, data: { key: 'synthetic-pi-import' } })
     throw new Error(`Unexpected ${path}`)
   })
   vi.stubGlobal('fetch', fetcher)
+  const opened = vi.spyOn(window, 'open').mockReturnValue(null)
   const language = createInstance()
   await language.init({ lng: 'en', resources: { en: { translation: {} } } })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -223,12 +240,36 @@ it('offers every permitted text model and keeps the choice when switching target
   const user = userEvent.setup()
   const picker = screen.getByRole('combobox', { name: 'Model' })
   await waitFor(() => expect(picker).toBeEnabled())
-  for (const app of ['Codex', 'Claude Code', 'Gemini CLI']) {
+  expect(screen.getByText('Use CC Switch 4.0.18 or later for all listed apps.')).toBeVisible()
+  await user.click(screen.getByRole('combobox', { name: 'Application' }))
+  expect(screen.getAllByRole('option')).toHaveLength(9)
+  expect(screen.queryByRole('option', { name: 'Claude Desktop' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('option', { name: 'MiniMax Code' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('option', { name: 'Kimi Code' })).not.toBeInTheDocument()
+  await user.keyboard('{Escape}')
+  for (const [app, endpoint] of [
+    ['Codex', 'https://api.example.test/gateway/v1'],
+    ['Claude Code', 'https://api.example.test/gateway'],
+    ['Gemini CLI', 'https://api.example.test/gateway'],
+    ['Antigravity CLI', 'https://api.example.test/gateway'],
+    ['Grok Build', 'https://api.example.test/gateway/v1'],
+    ['OpenCode', 'https://api.example.test/gateway/v1'],
+    ['OpenClaw', 'https://api.example.test/gateway/v1'],
+    ['Hermes', 'https://api.example.test/gateway/v1'],
+    ['Pi', 'https://api.example.test/gateway/v1'],
+  ]) {
     if (app !== 'Codex') {
       await user.click(screen.getByRole('combobox', { name: 'Application' }))
       await user.click(await screen.findByRole('option', { name: app }))
       expect(picker).toHaveTextContent('chat-only')
     }
+    expect(screen.getAllByText(endpoint!, { exact: true }).length).toBeGreaterThan(0)
+    if (app === 'Antigravity CLI')
+      expect(
+        screen.getByText(
+          'Launch Antigravity CLI from CC Switch after importing to use this provider.',
+        ),
+      ).toBeVisible()
     await user.click(picker)
     expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(
       expect.arrayContaining(['chat-only', 'claude-text', 'gemini-text', 'responses-only']),
@@ -238,6 +279,27 @@ it('offers every permitted text model and keeps the choice when switching target
     expect(screen.getByRole('button', { name: 'Prepare import' })).toBeEnabled()
   }
   expect(fetcher.mock.calls).toEqual([['/api/user/models?group=premium', expect.anything()]])
+  await user.click(screen.getByRole('button', { name: 'Prepare import' }))
+  await screen.findByRole('button', { name: 'Open CC Switch' })
+  expect(screen.getByRole('combobox', { name: 'Application' })).toBeDisabled()
+  expect(document.body.innerHTML).not.toContain('synthetic-pi-import')
+  await user.click(screen.getByRole('button', { name: 'Open CC Switch' }))
+  const imported = new URL(String(opened.mock.calls[0]?.[0]))
+  expect(imported.searchParams.get('app')).toBe('pi')
+  expect(imported.searchParams.get('apiFormat')).toBe('openai_chat')
+  expect(imported.searchParams.get('model')).toBe('chat-only')
+  expect(imported.searchParams.get('endpoint')).toBe('https://api.example.test/gateway/v1')
+  expect(imported.searchParams.get('apiKey')).toBe('sk-synthetic-pi-import')
+  expect(opened.mock.calls[0]?.slice(1)).toEqual(['_blank', 'noopener,noreferrer'])
+  expect(Object.values(localStorage).join(' ')).not.toContain('synthetic-pi-import')
+  expect(
+    JSON.stringify(
+      client
+        .getQueryCache()
+        .getAll()
+        .map((query) => query.state.data),
+    ),
+  ).not.toContain('synthetic-pi-import')
   client.clear()
 })
 

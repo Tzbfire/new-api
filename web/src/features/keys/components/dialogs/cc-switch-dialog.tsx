@@ -26,14 +26,24 @@ import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { getUserModels } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
+const PRIMARY_MODEL_FIELDS = [
+  { key: 'model', labelKey: 'Primary Model', required: true },
+] as const
+
 const APP_CONFIGS = {
   claude: {
-    label: 'Claude',
-    defaultName: 'My Claude',
+    label: 'Claude Code',
+    apiFormat: 'anthropic',
     modelFields: [
       { key: 'model', labelKey: 'Primary Model', required: true },
       { key: 'haikuModel', labelKey: 'Haiku Model', required: false },
@@ -43,17 +53,51 @@ const APP_CONFIGS = {
   },
   codex: {
     label: 'Codex',
-    defaultName: 'My Codex',
-    modelFields: [{ key: 'model', labelKey: 'Primary Model', required: true }],
+    apiFormat: 'openai_responses',
+    modelFields: PRIMARY_MODEL_FIELDS,
   },
   gemini: {
-    label: 'Gemini',
-    defaultName: 'My Gemini',
-    modelFields: [{ key: 'model', labelKey: 'Primary Model', required: true }],
+    label: 'Gemini CLI',
+    apiFormat: 'gemini_native',
+    modelFields: PRIMARY_MODEL_FIELDS,
+  },
+  agy: {
+    label: 'Antigravity CLI',
+    apiFormat: 'gemini_native',
+    modelFields: PRIMARY_MODEL_FIELDS,
+  },
+  grokbuild: {
+    label: 'Grok Build',
+    apiFormat: 'openai_responses',
+    modelFields: PRIMARY_MODEL_FIELDS,
+  },
+  opencode: {
+    label: 'OpenCode',
+    apiFormat: 'openai_chat',
+    modelFields: PRIMARY_MODEL_FIELDS,
+  },
+  openclaw: {
+    label: 'OpenClaw',
+    apiFormat: 'openai_chat',
+    modelFields: PRIMARY_MODEL_FIELDS,
+  },
+  hermes: {
+    label: 'Hermes',
+    apiFormat: 'openai_chat',
+    modelFields: PRIMARY_MODEL_FIELDS,
+  },
+  pi: {
+    label: 'Pi',
+    apiFormat: 'openai_chat',
+    modelFields: PRIMARY_MODEL_FIELDS,
   },
 } as const
 
 type AppType = keyof typeof APP_CONFIGS
+const APP_OPTIONS = Object.entries(APP_CONFIGS).map(([value, config]) => ({
+  value,
+  label: config.label,
+}))
 
 function getServerAddress(): string {
   try {
@@ -69,16 +113,21 @@ function getServerAddress(): string {
 }
 
 function buildCCSwitchURL(
-  app: string,
+  app: AppType,
   name: string,
   models: Record<string, string>,
   apiKey: string
 ): string {
   const serverAddress = getServerAddress()
-  const endpoint = app === 'codex' ? `${serverAddress}/v1` : serverAddress
+    .replace(/\/+$/, '')
+    .replace(/\/v1(?:beta)?$/i, '')
+  const apiFormat = APP_CONFIGS[app].apiFormat
+  const isNative = apiFormat === 'anthropic' || apiFormat === 'gemini_native'
+  const endpoint = isNative ? serverAddress : `${serverAddress}/v1`
   const params = new URLSearchParams()
   params.set('resource', 'provider')
   params.set('app', app)
+  params.set('apiFormat', apiFormat)
   params.set('name', name)
   params.set('endpoint', endpoint)
   params.set('apiKey', apiKey)
@@ -86,7 +135,7 @@ function buildCCSwitchURL(
     if (v) params.set(k, v)
   }
   params.set('homepage', serverAddress)
-  params.set('enabled', 'true')
+  params.set('enabled', 'false')
   return `ccswitch://v1/import?${params.toString()}`
 }
 
@@ -99,7 +148,7 @@ interface Props {
 export function CCSwitchDialog(props: Props) {
   const { t } = useTranslation()
   const [app, setApp] = useState<AppType>('claude')
-  const [name, setName] = useState<string>(APP_CONFIGS.claude.defaultName)
+  const [name, setName] = useState<string>(APP_CONFIGS.claude.label)
   const [models, setModels] = useState<Record<string, string>>({})
 
   const { data: modelsData } = useQuery({
@@ -121,16 +170,17 @@ export function CCSwitchDialog(props: Props) {
 
       setApp('claude')
 
-      setName(APP_CONFIGS.claude.defaultName)
+      setName(APP_CONFIGS.claude.label)
     }
   }, [props.open])
 
   const currentConfig = APP_CONFIGS[app]
 
-  const handleAppChange = (val: string) => {
+  const handleAppChange = (val: string | null) => {
+    if (!val || !(val in APP_CONFIGS)) return
     const appVal = val as AppType
     setApp(appVal)
-    setName(APP_CONFIGS[appVal].defaultName)
+    setName(APP_CONFIGS[appVal].label)
     setModels({})
   }
 
@@ -143,7 +193,7 @@ export function CCSwitchDialog(props: Props) {
       ? props.tokenKey
       : `sk-${props.tokenKey}`
     const url = buildCCSwitchURL(app, name, models, key)
-    window.open(url, '_blank')
+    window.open(url, '_blank', 'noopener,noreferrer')
     props.onOpenChange(false)
   }
 
@@ -166,26 +216,35 @@ export function CCSwitchDialog(props: Props) {
     >
       <div className='space-y-4'>
         <div className='space-y-2'>
-          <Label>{t('Application')}</Label>
-          <RadioGroup
+          <Label htmlFor='cc-switch-app'>{t('Application')}</Label>
+          <Select
+            items={APP_OPTIONS}
             value={app}
             onValueChange={handleAppChange}
-            className='flex gap-4'
           >
-            {(
-              Object.entries(APP_CONFIGS) as [
-                AppType,
-                (typeof APP_CONFIGS)[AppType],
-              ][]
-            ).map(([key, cfg]) => (
-              <div key={key} className='flex items-center gap-2'>
-                <RadioGroupItem value={key} id={`app-${key}`} />
-                <Label htmlFor={`app-${key}`} className='cursor-pointer'>
-                  {cfg.label}
-                </Label>
-              </div>
-            ))}
-          </RadioGroup>
+            <SelectTrigger id='cc-switch-app' className='w-full'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {APP_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className='text-muted-foreground text-xs'>
+            {t('Use CC Switch {{version}} or later for all listed apps.', {
+              version: '4.0.18',
+            })}
+          </p>
+          {app === 'agy' && (
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'Launch Antigravity CLI from CC Switch after importing to use this provider.'
+              )}
+            </p>
+          )}
         </div>
 
         <div className='space-y-2'>
@@ -194,7 +253,7 @@ export function CCSwitchDialog(props: Props) {
             id='cc-switch-name'
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder={currentConfig.defaultName}
+            placeholder={currentConfig.label}
           />
         </div>
 
