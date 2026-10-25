@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -248,6 +249,10 @@ func SubscriptionRequestBalancePay(c *gin.Context) {
 	}
 
 	if err := model.PurchaseSubscriptionWithBalance(userId, req.PlanId); err != nil {
+		if errors.Is(err, model.ErrQuotaBucketInsufficient) {
+			common.ApiErrorT(c, "Insufficient VIP balance")
+			return
+		}
 		common.ApiError(c, err)
 		return
 	}

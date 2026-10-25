@@ -10,7 +10,7 @@ import userEvent from '@testing-library/user-event'
 import { createInstance } from 'i18next'
 import { I18nextProvider } from 'react-i18next'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { clearAuth } from '@/lib/auth-state'
+import { acceptAuthBundle, clearAuth } from '@/lib/auth-state'
 import { SessionProvider } from '@/lib/session'
 import WalletPage from '../WalletPage'
 
@@ -76,4 +76,64 @@ it('keeps a successful redemption receipt and offers a read-only refresh when ba
   expect(
     screen.getByText('Your code was redeemed. Refresh your balance to see the latest amount.'),
   ).toBeVisible()
+})
+
+it('shows ordinary and configured VIP balances separately, including an empty paid bucket', async () => {
+  acceptAuthBundle({
+    access_token: 'synthetic-wallet-buckets',
+    token_type: 'Bearer',
+    access_expires_at: 9999999999,
+    session: {
+      sid: 'wallet-buckets',
+      current: true,
+      login_method: 'password',
+      ip: '',
+      user_agent: '',
+      created_at: 1,
+      last_active_at: 1,
+      expires_at: 9999999999,
+    },
+    user: {
+      id: 72,
+      username: 'buckets',
+      display_name: '',
+      email: '',
+      role: 1,
+      group: 'default',
+      quota: 1000000,
+      used_quota: 0,
+      request_count: 0,
+      quota_buckets: {
+        enabled: true,
+        paid_group: 'premium',
+        groups: [{ billing_group: 'default', amount_remaining: 1000000 }],
+      },
+    },
+  })
+  const cache = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  })
+  cache.setQueryData(['status'], { quota_per_unit: 500000, quota_display_type: 'USD' })
+  cache.setQueryData(['topup-info'], { pay_methods: [] })
+  cache.setQueryData(['subscriptions'], { subscriptions: [], all_subscriptions: [] })
+  const language = createInstance()
+  await language.init({ lng: 'en', resources: { en: { translation: {} } } })
+  const router = createRouter({
+    routeTree: createRootRoute({ component: WalletPage }),
+    history: createMemoryHistory(),
+  })
+  render(
+    <I18nextProvider i18n={language}>
+      <QueryClientProvider client={cache}>
+        <SessionProvider>
+          <RouterProvider router={router} />
+        </SessionProvider>
+      </QueryClientProvider>
+    </I18nextProvider>,
+  )
+  const free = await screen.findByText('Default balance')
+  const vip = screen.getByText('premium balance')
+  expect(free.closest('div')).toHaveTextContent('$2.00')
+  expect(vip.closest('div')).toHaveTextContent('$0.00')
+  cache.clear()
 })

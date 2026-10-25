@@ -29,6 +29,7 @@ export default function WalletPage() {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const session = useSession()
+  const buckets = session.user?.quota_buckets
   const site = useStatus()
   const cache = useQueryClient()
   const info = useQuery({ queryKey: ['topup-info'], queryFn: getTopupInfo })
@@ -215,6 +216,33 @@ export default function WalletPage() {
             <strong className="balance-number">
               {formatBalance(session.user?.quota || 0, site.data, locale)}
             </strong>
+            {buckets?.enabled && (
+              <dl className="stack">
+                {Array.from(
+                  new Set([
+                    'default',
+                    buckets.paid_group || 'VIP',
+                    ...buckets.groups.map((group) => group.billing_group),
+                  ]),
+                ).map((group) => (
+                  <div key={group}>
+                    <dt>
+                      {group === 'default'
+                        ? t('Default balance')
+                        : t('{{group}} balance', { group })}
+                    </dt>
+                    <dd>
+                      {formatBalance(
+                        buckets.groups.find((bucket) => bucket.billing_group === group)
+                          ?.amount_remaining || 0,
+                        site.data,
+                        locale,
+                      )}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            )}
             <span className="muted">
               {t('Pay for what you use. Your balance stays in your account.')}
             </span>

@@ -137,6 +137,41 @@ describe('provider checkout contracts', () => {
       fetch.mock.calls.filter(([path]) => path === '/api/subscription/balance/pay'),
     ).toHaveLength(1)
   })
+  it.each([true, false])(
+    'offers VIP purchase independently of ordinary balance policy (%s)',
+    async (allowBalancePay) => {
+      const { fetcher, client } = await renderPlanPreview({ bucketBilling: true, allowBalancePay })
+      await userEvent.click(await screen.findByRole('button', { name: 'Choose plan' }))
+      expect(await screen.findByRole('button', { name: 'Pay with premium balance' })).toBeVisible()
+      expect(screen.queryByRole('button', { name: 'Wallet balance' })).not.toBeInTheDocument()
+      expect(screen.getByText(/premium balance:/)).toBeVisible()
+      await userEvent.click(screen.getByRole('button', { name: 'Confirm purchase' }))
+      await waitFor(() =>
+        expect(
+          fetcher.mock.calls.filter(([path]) => path === '/api/subscription/wallet/pay'),
+        ).toHaveLength(1),
+      )
+      expect(fetcher.mock.calls.some(([path]) => path === '/api/subscription/balance/pay')).toBe(
+        false,
+      )
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: 'Confirm purchase' })).not.toBeInTheDocument(),
+      )
+      client.clear()
+    },
+  )
+
+  it('keeps a legacy plan without balance redemption unavailable when bucket billing is off', async () => {
+    const { client } = await renderPlanPreview({ bucketBilling: false, allowBalancePay: false })
+    await userEvent.click(await screen.findByRole('button', { name: 'Choose plan' }))
+    expect(
+      screen.queryByRole('button', { name: 'Pay with premium balance' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Wallet balance' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Confirm purchase' })).toBeDisabled()
+    client.clear()
+  })
+
   it.each([
     { selectableNow: true, selectableAfterPurchase: true },
     { selectableNow: false, selectableAfterPurchase: true },
@@ -385,6 +420,8 @@ describe('provider checkout contracts', () => {
 
 async function renderPlanPreview(
   options: {
+    bucketBilling?: boolean
+    allowBalancePay?: boolean
     selectableNow?: boolean
     selectableAfterPurchase?: boolean
     secondPlan?: boolean
@@ -403,7 +440,15 @@ async function renderPlanPreview(
       email: '',
       role: 1,
       group: 'default',
-      quota: 0,
+      quota: 5000000,
+      quota_buckets: {
+        enabled: options.bucketBilling ?? false,
+        paid_group: 'premium',
+        groups: [
+          { billing_group: 'default', amount_remaining: 4000000 },
+          { billing_group: 'premium', amount_remaining: 1000000 },
+        ],
+      },
       used_quota: 0,
       request_count: 0,
     },
@@ -435,6 +480,7 @@ async function renderPlanPreview(
             title: `Code plan ${id}`,
             currency: 'USD',
             price_amount: 10,
+            allow_balance_pay: options.allowBalancePay,
             allowed_token_groups: options.unrestricted ? '' : 'codeplan',
             duration_unit: 'month',
             duration_value: 1,
@@ -480,6 +526,9 @@ async function renderPlanPreview(
           ],
         },
       })
+    if (path === '/api/subscription/wallet/pay') return Response.json({ success: true, data: {} })
+    if (path === '/api/user/self')
+      return Response.json({ success: true, data: getAuthSnapshot().user })
     // The general catalog deliberately contains no access to the plan group.
     if (path === '/api/pricing')
       return Response.json({

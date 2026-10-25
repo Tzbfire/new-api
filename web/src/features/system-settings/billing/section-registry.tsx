@@ -50,6 +50,8 @@ const getGroupDefaults = (settings: BillingSettings) => ({
   GroupDisplayOrder: settings['group_setting.display_order'],
   MaxTokenAutoGroups: settings.MaxTokenAutoGroups,
   DefaultUseAutoGroup: settings.DefaultUseAutoGroup,
+  QuotaBucketBillingEnabled: settings.QuotaBucketBillingEnabled,
+  PaidQuotaBillingGroup: settings.PaidQuotaBillingGroup,
   GroupSpecialUsableGroup:
     settings['group_ratio_setting.group_special_usable_group'],
 })

@@ -2937,7 +2937,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.": "高级自定义渠道仅对 /v1/responses 且不做协议转换的路由生效。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",
     "For group-scoped plans, keep this off unless you intentionally want wallet billing at the wallet group ratio after package quota is used up": "限制分组的套餐建议保持关闭；仅当需要额度用尽后按钱包分组倍率继续扣余额时再开启",
@@ -7588,6 +7588,20 @@
     "Zhipu": "智谱",
     "Zhipu GLM": "智谱GLM",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Quota bucket billing": "余额桶计费",
+    "When enabled, top-up and redemption quota enters the paid quota bucket and is billed with the configured entitlement group ratio. Legacy and gifted quota remains in the default bucket.": "启用后，充值和兑换码额度进入付费余额桶，并按配置的权益分组倍率扣费；旧余额和赠送额度仍保留在默认余额桶。",
+    "Enable strict quota bucket billing": "启用余额桶严格计费",
+    "When disabled, the system keeps the legacy single users.quota balance behavior.": "关闭时，系统保持旧的 users.quota 单余额逻辑。",
+    "Paid quota entitlement group": "付费额度权益分组",
+    "Top-up and redemption quota uses this group ratio. It must exactly match a key in the group ratio settings.": "充值/兑换码额度使用该分组倍率，必须与分组倍率里的 key 完全一致。",
+    "When enabled, top-up and redemption quota enters the paid quota bucket.": "启用后，充值和兑换码额度进入付费余额桶。",
+    "Quota cannot be negative": "额度不能为负数",
+    "Subscription plan does not exist": "订阅套餐不存在",
+    "VIP balance payment is not enabled": "未启用 VIP 余额支付",
+    "Paid quota bucket group cannot be default": "付费额度桶分组不能为 default",
+    "Insufficient VIP balance": "VIP 余额不足",
+    "Default balance": "普通余额",
+    "{{group}} balance": "{{group}} 余额"
   }
 }

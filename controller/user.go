@@ -495,6 +495,20 @@ func buildSelfUserData(user *model.User) map[string]any {
 	userSetting := user.GetSetting()
 	permissions := calculateUserPermissions(user.Role)
 	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
+	quotaBucketSummary := map[string]any{
+		"enabled":    model.IsQuotaBucketBillingEnabled(),
+		"paid_group": model.GetPaidQuotaBillingGroup(),
+		"groups":     []model.UserQuotaBucketGroupSummary{},
+	}
+	if model.IsQuotaBucketBillingEnabled() {
+		groups, err := model.GetUserQuotaBucketGroupSummaries(user.Id)
+		if err != nil {
+			common.SysLog(fmt.Sprintf("failed to get user quota bucket summaries (userId=%d): %s", user.Id, err.Error()))
+		} else {
+			quotaBucketSummary["groups"] = groups
+		}
+	}
+
 	return map[string]any{
 		"id":                user.Id,
 		"username":          user.Username,
@@ -520,6 +534,7 @@ func buildSelfUserData(user *model.User) map[string]any {
 		"linux_do_id":       user.LinuxDOId,
 		"setting":           user.Setting,
 		"stripe_customer":   user.StripeCustomer,
+		"quota_buckets":     quotaBucketSummary,
 		"sidebar_modules":   userSetting.SidebarModules, // 正确提取sidebar_modules字段
 		"permissions":       permissions,
 	}

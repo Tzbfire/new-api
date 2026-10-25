@@ -29,7 +29,7 @@ type TaskBillingAdjustment struct {
 // ApplyTaskRefundTarget atomically moves the task's total refund to targetQuota.
 // It supports both positive corrections and charge-backs when a late final
 // settlement differs from an earlier timeout estimate.
-func ApplyTaskRefundTarget(taskID string, userID int, subscriptionID int, targetQuota int) (int, error) {
+func ApplyTaskRefundTarget(taskID string, userID int, subscriptionID int, targetQuota int, billingMeta ...QuotaBucketChargeMeta) (int, error) {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" || userID <= 0 || targetQuota < 0 {
 		return 0, errors.New("invalid task refund")
@@ -77,6 +77,17 @@ func ApplyTaskRefundTarget(taskID string, userID int, subscriptionID int, target
 				return errors.New("subscription refund adjustment exceeds total")
 			}
 			if err := tx.Save(&subscription).Error; err != nil {
+				return err
+			}
+		} else if IsQuotaBucketBillingEnabled() {
+			meta := QuotaBucketChargeMeta{RequestID: taskID, BillingGroup: QuotaBucketBillingGroupDefault}
+			if len(billingMeta) > 0 {
+				meta = billingMeta[0]
+			}
+			if meta.RequestID == "" {
+				meta.RequestID = taskID
+			}
+			if err := adjustTaskQuotaBucketsTx(tx, userID, meta, -appliedDelta); err != nil {
 				return err
 			}
 		} else {

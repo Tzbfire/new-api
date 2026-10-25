@@ -49,6 +49,8 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model
 	}
 	other := model.NewLogOther()
 	other.SetPublic("is_task", true)
+	other.SetPublic("billing_group", task.PrivateData.BillingGroup)
+	other.SetPublic("request_id", task.PrivateData.RequestId)
 	other.SetPublic("request_path", c.Request.URL.Path)
 	if taskDeliveredInline(c, task) {
 		other.SetPublic("task_sync", true)
@@ -116,6 +118,17 @@ func taskIsSubscription(task *model.Task) bool {
 func taskAdjustFunding(task *model.Task, delta int) error {
 	if taskIsSubscription(task) {
 		return model.PostConsumeUserSubscriptionDelta(task.PrivateData.SubscriptionId, int64(delta))
+	}
+	if model.IsQuotaBucketBillingEnabled() && task.PrivateData.RequestId != "" {
+		meta := model.QuotaBucketChargeMeta{
+			RequestID:    task.PrivateData.RequestId,
+			UsingGroup:   task.Group,
+			BillingGroup: task.PrivateData.BillingGroup,
+			ModelName:    taskModelName(task),
+			TokenId:      task.PrivateData.TokenId,
+			ChannelId:    task.ChannelId,
+		}
+		return model.SettleUserQuotaBuckets(task.UserId, meta, delta)
 	}
 	if delta > 0 {
 		return model.DecreaseUserQuota(task.UserId, delta, false)
@@ -259,6 +272,8 @@ func taskModelName(task *model.Task) string {
 
 type consumeLogBillingOther struct {
 	BillingSource  string `json:"billing_source"`
+	BillingGroup   string `json:"billing_group"`
+	RequestId      string `json:"request_id"`
 	SubscriptionId int    `json:"subscription_id"`
 }
 
@@ -302,7 +317,13 @@ func BackfillTaskBillingFromConsumeLog(ctx context.Context, task *model.Task, re
 	if task.PrivateData.BillingSource == "" {
 		task.PrivateData.BillingSource = other.BillingSource
 	}
-	if task.PrivateData.SubscriptionId == 0 {
+	if task.PrivateData.BillingGroup == "" && other.BillingGroup != "" {
+		task.PrivateData.BillingGroup = other.BillingGroup
+	}
+	if task.PrivateData.RequestId == "" && other.RequestId != "" {
+		task.PrivateData.RequestId = other.RequestId
+	}
+	if task.PrivateData.SubscriptionId == 0 && other.SubscriptionId > 0 {
 		task.PrivateData.SubscriptionId = other.SubscriptionId
 	}
 	return true
@@ -496,13 +517,21 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	}
 
 	groupRatio := ratio_setting.GetGroupRatio(group)
-	userGroupRatio, hasUserGroupRatio := ratio_setting.GetGroupGroupRatio(group, group)
+	effectiveUserGroup := group
+	if task.PrivateData.BillingGroup != "" {
+		effectiveUserGroup = task.PrivateData.BillingGroup
+	}
+	userGroupRatio, hasUserGroupRatio := ratio_setting.GetGroupGroupRatio(effectiveUserGroup, group)
 
 	var finalGroupRatio float64
 	if hasUserGroupRatio {
 		finalGroupRatio = userGroupRatio
 	} else {
 		finalGroupRatio = groupRatio
+	}
+
+	if bc := task.PrivateData.BillingContext; bc != nil {
+		finalGroupRatio = bc.GroupRatio
 	}
 
 	// 计算 OtherRatios 乘积（视频折扣、时长等）

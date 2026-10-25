@@ -75,6 +75,10 @@ export default function PlansPage() {
       }),
     onSuccess: () => cache.invalidateQueries({ queryKey: ['subscriptions'] }),
   })
+  const buckets = session.user?.quota_buckets
+  const paidGroup = buckets?.paid_group || 'VIP'
+  const paidBalance =
+    buckets?.groups.find((group) => group.billing_group === paidGroup)?.amount_remaining || 0
   const paymentMethods =
     selected && info.data
       ? enabledMethods(info.data).filter((item) => {
@@ -85,16 +89,24 @@ export default function PlansPage() {
       : []
   if (selected?.creem_product_id && info.data?.enable_creem_topup)
     paymentMethods.push({ type: 'creem', name: 'Creem' })
-  if (selected?.allow_balance_pay !== false && selected)
+  if (selected && buckets?.enabled) {
+    paymentMethods.unshift({
+      type: 'vip',
+      name: t('Pay with {{group}} balance', { group: paidGroup }),
+    })
+  } else if (selected?.allow_balance_pay !== false && selected) {
     paymentMethods.unshift({ type: 'balance', name: t('Wallet balance') })
+  }
   const activeMethod = paymentMethods.some((item) => item.type === method)
     ? method
     : paymentMethods[0]?.type || ''
   const buy = useMutation({
     mutationFn: async () => {
       if (!selected || !activeMethod) throw new Error('Choose a payment method.')
-      if (activeMethod === 'balance') {
-        await request('/api/subscription/balance/pay', {
+      if (activeMethod === 'balance' || activeMethod === 'vip') {
+        const endpoint =
+          activeMethod === 'vip' ? '/api/subscription/wallet/pay' : '/api/subscription/balance/pay'
+        await request(endpoint, {
           method: 'POST',
           body: JSON.stringify({ plan_id: selected.id }),
         })
@@ -296,7 +308,15 @@ export default function PlansPage() {
             onChange={setMethod}
             disabled={buy.isPending}
           />
-          {activeMethod === 'balance' && (
+          {activeMethod === 'vip' && (
+            <p className="muted">
+              {t('{{group}} balance: {{balance}}', {
+                group: paidGroup,
+                balance: formatBalance(paidBalance, site.data, locale),
+              })}
+            </p>
+          )}
+          {(activeMethod === 'balance' || activeMethod === 'vip') && (
             <p className="muted">
               {t('The plan price will be deducted from your wallet immediately.')}
             </p>

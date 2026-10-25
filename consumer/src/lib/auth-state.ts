@@ -8,6 +8,11 @@ export interface User {
   status?: number
   group: string
   quota: number
+  quota_buckets?: {
+    enabled: boolean
+    paid_group?: string
+    groups: Array<{ billing_group: string; amount_remaining: number }>
+  }
   used_quota: number
   request_count: number
   setting?: string

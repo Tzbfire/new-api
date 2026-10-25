@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
@@ -14,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -35,6 +37,76 @@ func modelPriceNotConfiguredError(c *gin.Context, modelName string, userId int) 
 // https://docs.claude.com/en/docs/build-with-claude/prompt-caching#1-hour-cache-duration
 const claudeCacheCreation1hMultiplier = 6 / 3.75
 
+func quotaBucketBillingAppliesToWallet(info *relaycommon.RelayInfo) bool {
+	if info == nil || !setting.QuotaBucketBillingEnabled {
+		return false
+	}
+	pref := common.NormalizeBillingPreference(info.UserSetting.BillingPreference)
+	switch pref {
+	case "subscription_only":
+		return false
+	case "wallet_only", "wallet_first":
+		return true
+	case "subscription_first", "":
+		fallthrough
+	default:
+		hasSub, err := model.HasActiveUserSubscriptionForGroup(info.UserId, info.UsingGroup)
+		if err != nil {
+			common.SysLog("failed to check active subscription for quota bucket billing: " + err.Error())
+			return false
+		}
+		return !hasSub
+	}
+}
+
+func PrepareQuotaBucketBillingGroup(ctx *gin.Context, info *relaycommon.RelayInfo) {
+	if ctx != nil && info != nil {
+		if group, pinned := ctx.Get(string(constant.ContextKeyQuotaBucketBillingGroup)); pinned {
+			info.BillingGroup, _ = group.(string)
+			return
+		}
+	}
+	if !quotaBucketBillingAppliesToWallet(info) {
+		return
+	}
+	paidGroup := model.GetPaidQuotaBillingGroup()
+	balance, err := model.GetUserQuotaBucketBalance(info.UserId, paidGroup)
+	if err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("quota bucket billing balance check failed: %s", err.Error()))
+		return
+	}
+	if balance > 0 {
+		info.BillingGroup = paidGroup
+	}
+}
+
+func FallbackQuotaBucketBillingGroup(ctx *gin.Context, info *relaycommon.RelayInfo, quota int) bool {
+	if ctx != nil {
+		if _, pinned := ctx.Get(string(constant.ContextKeyQuotaBucketBillingGroup)); pinned {
+			return false
+		}
+	}
+	if !quotaBucketBillingAppliesToWallet(info) || quota <= 0 {
+		return false
+	}
+	paidGroup := model.GetPaidQuotaBillingGroup()
+	if info.BillingGroup != paidGroup {
+		return false
+	}
+	balance, err := model.GetUserQuotaBucketBalance(info.UserId, paidGroup)
+	if err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("quota bucket billing fallback balance check failed: %s", err.Error()))
+		return false
+	}
+	if balance >= quota {
+		return false
+	}
+	logger.LogInfo(ctx, fmt.Sprintf("user %d has insufficient %s bucket balance, falling back to default quota (available: %s, required: %s)",
+		info.UserId, paidGroup, logger.FormatQuota(balance), logger.FormatQuota(quota)))
+	info.BillingGroup = ""
+	return true
+}
+
 // HandleGroupRatio checks for "auto_group" in the context and updates the group ratio and relayInfo.UsingGroup if present
 func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hosttypes.GroupRatioInfo {
 	groupRatioInfo := hosttypes.GroupRatioInfo{
@@ -50,7 +122,11 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hostty
 	}
 
 	// check user group special ratio
-	userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup)
+	effectiveUserGroup := relayInfo.UserGroup
+	if model.IsQuotaBucketBillingEnabled() && relayInfo.BillingGroup != "" {
+		effectiveUserGroup = relayInfo.BillingGroup
+	}
+	userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(effectiveUserGroup, relayInfo.UsingGroup)
 	if ok {
 		// user group special ratio
 		groupRatioInfo.GroupSpecialRatio = userGroupRatio
@@ -65,6 +141,15 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hostty
 }
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (hosttypes.PriceData, error) {
+	PrepareQuotaBucketBillingGroup(c, info)
+	data, err := modelPriceHelper(c, info, promptTokens, meta)
+	if err == nil && FallbackQuotaBucketBillingGroup(c, info, data.QuotaToPreConsume) {
+		return modelPriceHelper(c, info, promptTokens, meta)
+	}
+	return data, err
+}
+
+func modelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (hosttypes.PriceData, error) {
 	if info != nil {
 		if matched := resolveBillingModelName(info.GetOriginModelName()); matched != "" && matched != info.OriginModelName {
 			info.BillingModelName = matched
@@ -210,6 +295,15 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 
 // ModelPriceHelperPerCall 按次/按量计费的 PriceHelper (MJ、Task)
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hosttypes.PriceData, error) {
+	PrepareQuotaBucketBillingGroup(c, info)
+	data, err := modelPriceHelperPerCall(c, info)
+	if err == nil && FallbackQuotaBucketBillingGroup(c, info, data.Quota) {
+		return modelPriceHelperPerCall(c, info)
+	}
+	return data, err
+}
+
+func modelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hosttypes.PriceData, error) {
 	groupRatioInfo := HandleGroupRatio(c, info)
 
 	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)

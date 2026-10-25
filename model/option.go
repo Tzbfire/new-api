@@ -145,6 +145,8 @@ func InitOptionMap() {
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
 	common.OptionMap["MaxTokenAutoGroups"] = strconv.Itoa(setting.GetMaxTokenAutoGroups())
+	common.OptionMap["QuotaBucketBillingEnabled"] = strconv.FormatBool(setting.QuotaBucketBillingEnabled)
+	common.OptionMap["PaidQuotaBillingGroup"] = setting.GetPaidQuotaBillingGroup()
 	common.OptionMap["PayMethods"] = operation_setting.PayMethods2JsonString()
 	common.OptionMap["GitHubClientId"] = ""
 	common.OptionMap["GitHubClientSecret"] = ""
@@ -503,6 +505,8 @@ func updateOptionMap(key string, value string) (err error) {
 			system_setting.WorkerAllowHttpImageRequestEnabled = boolValue
 		case "DefaultUseAutoGroup":
 			setting.DefaultUseAutoGroup = boolValue
+		case "QuotaBucketBillingEnabled":
+			setting.QuotaBucketBillingEnabled = boolValue
 		case "ExposeRatioEnabled":
 			ratio_setting.SetExposeRatioEnabled(boolValue)
 		}
@@ -718,6 +722,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = operation_setting.AutomaticRetryStatusCodesFromString(value)
 	case "StreamCacheQueueLength":
 		setting.StreamCacheQueueLength, _ = strconv.Atoi(value)
+	case "PaidQuotaBillingGroup":
+		setting.PaidQuotaBillingGroup = value
 	case "PayMethods":
 		err = operation_setting.UpdatePayMethodsByJsonString(value)
 	case "WaffoPayMethods":

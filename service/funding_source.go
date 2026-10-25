@@ -33,18 +33,46 @@ type FundingSource interface {
 var ErrInsufficientWalletQuota = errors.New("wallet quota insufficient")
 
 type WalletFunding struct {
-	userId   int
-	consumed int // 实际预扣的用户额度
-	forceDB  bool
+	userId       int
+	requestId    string
+	billingGroup string
+	usingGroup   string
+	modelName    string
+	tokenId      int
+	channelId    int
+	consumed     int // 实际预扣的用户额度
+	forceDB      bool
 }
 
 func (w *WalletFunding) Source() string { return BillingSourceWallet }
 
+func (w *WalletFunding) bucketMeta() model.QuotaBucketChargeMeta {
+	return model.QuotaBucketChargeMeta{
+		RequestID:    w.requestId,
+		UsingGroup:   w.usingGroup,
+		BillingGroup: w.billingGroup,
+		ModelName:    w.modelName,
+		TokenId:      w.tokenId,
+		ChannelId:    w.channelId,
+	}
+}
+
 func (w *WalletFunding) PreConsume(amount int) error {
+	return w.consume(amount, model.QuotaBucketTxnTypePreConsume)
+}
+
+func (w *WalletFunding) consume(amount int, txnType string) error {
 	if amount <= 0 {
 		return nil
 	}
-	if w.forceDB {
+	if model.IsQuotaBucketBillingEnabled() {
+		if _, err := model.DebitUserQuotaBuckets(w.userId, amount, w.bucketMeta(), txnType); err != nil {
+			if errors.Is(err, model.ErrQuotaBucketInsufficient) {
+				return ErrInsufficientWalletQuota
+			}
+			return err
+		}
+	} else if w.forceDB {
 		if err := model.DecreaseUserQuotaIfEnough(w.userId, amount); err != nil {
 			if errors.Is(err, model.ErrInsufficientUserQuota) {
 				return ErrInsufficientWalletQuota
@@ -68,10 +96,19 @@ func (w *WalletFunding) Settle(delta int) error {
 	if delta == 0 {
 		return nil
 	}
-	if delta > 0 {
-		return w.decrease(delta)
+	if model.IsQuotaBucketBillingEnabled() {
+		if err := model.SettleUserQuotaBuckets(w.userId, w.bucketMeta(), delta); err != nil {
+			return err
+		}
+	} else if delta > 0 {
+		if err := w.decrease(delta); err != nil {
+			return err
+		}
+	} else if err := model.IncreaseUserQuota(w.userId, -delta, w.forceDB); err != nil {
+		return err
 	}
-	return model.IncreaseUserQuota(w.userId, -delta, w.forceDB)
+	w.consumed += delta
+	return nil
 }
 
 func (w *WalletFunding) decrease(amount int) error {
@@ -84,6 +121,9 @@ func (w *WalletFunding) decrease(amount int) error {
 func (w *WalletFunding) Refund() error {
 	if w.consumed <= 0 {
 		return nil
+	}
+	if model.IsQuotaBucketBillingEnabled() {
+		return model.RefundUserQuotaBuckets(w.requestId)
 	}
 	// IncreaseUserQuota 是 quota += N 的非幂等操作，不能重试，否则会多退额度。
 	// 订阅的 RefundSubscriptionPreConsume 有 requestId 幂等保护所以可以重试。

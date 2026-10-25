@@ -158,6 +158,8 @@ const createGroupSchema = (t: Translate) =>
     }),
     MaxTokenAutoGroups: positiveIntegerSchema(t('Enter a positive integer')),
     DefaultUseAutoGroup: z.boolean(),
+    QuotaBucketBillingEnabled: z.boolean(),
+    PaidQuotaBillingGroup: z.string(),
     GroupSpecialUsableGroup: createJsonStringField(t),
   })
 
@@ -264,6 +266,8 @@ export function RatioSettingsCard({
     GroupDisplayOrder: normalizeJsonString(groupDefaults.GroupDisplayOrder),
     MaxTokenAutoGroups: groupDefaults.MaxTokenAutoGroups,
     DefaultUseAutoGroup: groupDefaults.DefaultUseAutoGroup,
+    QuotaBucketBillingEnabled: groupDefaults.QuotaBucketBillingEnabled,
+    PaidQuotaBillingGroup: groupDefaults.PaidQuotaBillingGroup,
     GroupSpecialUsableGroup: normalizeJsonString(
       groupDefaults.GroupSpecialUsableGroup
     ),
@@ -303,6 +307,7 @@ export function RatioSettingsCard({
       GroupGroupRatio: formatJsonForTextarea(groupDefaults.GroupGroupRatio),
       AutoGroups: formatJsonForTextarea(groupDefaults.AutoGroups),
       GroupDisplayOrder: formatJsonForTextarea(groupDefaults.GroupDisplayOrder),
+      PaidQuotaBillingGroup: groupDefaults.PaidQuotaBillingGroup,
       GroupSpecialUsableGroup: formatJsonForTextarea(
         groupDefaults.GroupSpecialUsableGroup
       ),
@@ -356,6 +361,8 @@ export function RatioSettingsCard({
       GroupDisplayOrder: normalizeJsonString(groupDefaults.GroupDisplayOrder),
       MaxTokenAutoGroups: groupDefaults.MaxTokenAutoGroups,
       DefaultUseAutoGroup: groupDefaults.DefaultUseAutoGroup,
+      QuotaBucketBillingEnabled: groupDefaults.QuotaBucketBillingEnabled,
+      PaidQuotaBillingGroup: groupDefaults.PaidQuotaBillingGroup,
       GroupSpecialUsableGroup: normalizeJsonString(
         groupDefaults.GroupSpecialUsableGroup
       ),
@@ -369,6 +376,7 @@ export function RatioSettingsCard({
       GroupGroupRatio: formatJsonForTextarea(groupDefaults.GroupGroupRatio),
       AutoGroups: formatJsonForTextarea(groupDefaults.AutoGroups),
       GroupDisplayOrder: formatJsonForTextarea(groupDefaults.GroupDisplayOrder),
+      PaidQuotaBillingGroup: groupDefaults.PaidQuotaBillingGroup,
       GroupSpecialUsableGroup: formatJsonForTextarea(
         groupDefaults.GroupSpecialUsableGroup
       ),
@@ -436,6 +444,8 @@ export function RatioSettingsCard({
         GroupDisplayOrder: normalizeJsonString(values.GroupDisplayOrder),
         MaxTokenAutoGroups: values.MaxTokenAutoGroups,
         DefaultUseAutoGroup: values.DefaultUseAutoGroup,
+        QuotaBucketBillingEnabled: values.QuotaBucketBillingEnabled,
+        PaidQuotaBillingGroup: values.PaidQuotaBillingGroup,
         GroupSpecialUsableGroup: normalizeJsonString(
           values.GroupSpecialUsableGroup
         ),

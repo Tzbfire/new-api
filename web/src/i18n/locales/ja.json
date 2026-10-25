@@ -2937,7 +2937,7 @@
     "footer.columns.related.links.oneApi": "1つのAPI",
     "footer.columns.related.title": "関連プロジェクト",
     "footer.defaultCopyright": "すべての権利を留保します。",
-    "footer.new\u0061pi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
+    "footer.newapi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
     "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.": "高度なカスタムチャネルでは、プロトコル変換を行わない /v1/responses ルートにのみ適用されます。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "2025 年 5 月 10 日以降に追加されたチャネルの場合、デプロイ時にモデル名から「.」を削除する必要はありません",
     "For group-scoped plans, keep this off unless you intentionally want wallet billing at the wallet group ratio after package quota is used up": "グループ制限付きプランでは、枠を使い切った後にウォレット比率で課金したい場合のみオンにしてください（通常はオフ推奨）",
@@ -7588,6 +7588,20 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Quota bucket billing": "Quota bucket billing",
+    "When enabled, top-up and redemption quota enters the paid quota bucket and is billed with the configured entitlement group ratio. Legacy and gifted quota remains in the default bucket.": "When enabled, top-up and redemption quota enters the paid quota bucket and is billed with the configured entitlement group ratio. Legacy and gifted quota remains in the default bucket.",
+    "Enable strict quota bucket billing": "Enable strict quota bucket billing",
+    "When disabled, the system keeps the legacy single users.quota balance behavior.": "When disabled, the system keeps the legacy single users.quota balance behavior.",
+    "Paid quota entitlement group": "Paid quota entitlement group",
+    "Top-up and redemption quota uses this group ratio. It must exactly match a key in the group ratio settings.": "Top-up and redemption quota uses this group ratio. It must exactly match a key in the group ratio settings.",
+    "When enabled, top-up and redemption quota enters the paid quota bucket.": "When enabled, top-up and redemption quota enters the paid quota bucket.",
+    "Quota cannot be negative": "Quota cannot be negative",
+    "Subscription plan does not exist": "Subscription plan does not exist",
+    "VIP balance payment is not enabled": "VIP balance payment is not enabled",
+    "Paid quota bucket group cannot be default": "Paid quota bucket group cannot be default",
+    "Insufficient VIP balance": "Insufficient VIP balance",
+    "Default balance": "Default balance",
+    "{{group}} balance": "{{group}} balance"
   }
 }

@@ -451,7 +451,23 @@ func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, pre
 		}
 	} else {
 		// Wallet
-		if quota > 0 {
+		if model.IsQuotaBucketBillingEnabled() {
+			meta := model.QuotaBucketChargeMeta{
+				RequestID:    relayInfo.RequestId,
+				UsingGroup:   relayInfo.UsingGroup,
+				BillingGroup: relayInfo.BillingGroup,
+				ModelName:    relayInfo.OriginModelName,
+				TokenId:      relayInfo.TokenId,
+				ChannelId:    relayInfo.ChannelId,
+			}
+			if quota > 0 {
+				_, err = model.DebitUserQuotaBuckets(relayInfo.UserId, quota, meta, model.QuotaBucketTxnTypeSettle)
+			} else if quota < 0 && relayInfo.RequestId != "" {
+				err = model.RefundUserQuotaBucketDelta(relayInfo.RequestId, relayInfo.UserId, -quota)
+			} else if quota < 0 {
+				err = model.CreditUserQuotaBucket(relayInfo.UserId, -quota, model.QuotaBucketSourceRefund, "", model.QuotaBucketBillingGroupDefault)
+			}
+		} else if quota > 0 {
 			err = model.DecreaseUserQuota(relayInfo.UserId, quota, false)
 		} else {
 			err = model.IncreaseUserQuota(relayInfo.UserId, -quota, false)

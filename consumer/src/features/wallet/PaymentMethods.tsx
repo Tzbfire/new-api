@@ -22,7 +22,11 @@ export function PaymentMethods(props: {
             onClick={() => props.onChange(method.type)}
           >
             <span className={`payment-brand payment-brand-${method.type}`} aria-hidden="true">
-              {method.type === 'balance' ? <Wallet size={21} /> : <CreditCard size={21} />}
+              {method.type === 'balance' || method.type === 'vip' ? (
+                <Wallet size={21} />
+              ) : (
+                <CreditCard size={21} />
+              )}
             </span>
             <span>{method.name}</span>
             {method.type === props.value && <Check size={17} aria-hidden="true" />}

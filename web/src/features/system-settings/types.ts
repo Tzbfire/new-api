@@ -275,6 +275,8 @@ export type ModelSettings = {
   'group_setting.display_order': string
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
+  QuotaBucketBillingEnabled: boolean
+  PaidQuotaBillingGroup: string
   'group_ratio_setting.group_special_usable_group': string
   'model_deployment.ionet.api_key': string
   'model_deployment.ionet.enabled': boolean
@@ -316,6 +318,8 @@ export type BillingSettings = {
   'group_setting.display_order': string
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
+  QuotaBucketBillingEnabled: boolean
+  PaidQuotaBillingGroup: string
   'group_ratio_setting.group_special_usable_group': string
   PayAddress: string
   EpayId: string

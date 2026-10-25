@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
@@ -143,6 +144,9 @@ func (s *BillingSession) needsRefundLocked() bool {
 	if s.tokenConsumed > 0 {
 		return true
 	}
+	if wallet, ok := s.funding.(*WalletFunding); ok && wallet.consumed > 0 {
+		return true
+	}
 	// 订阅可能在 tokenConsumed=0 时仍预扣了额度
 	if sub, ok := s.funding.(*SubscriptionFunding); ok && sub.preConsumed > 0 {
 		return true
@@ -245,6 +249,9 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 		if strings.Contains(errMsg, "no active subscription") || strings.Contains(errMsg, "subscription quota insufficient") {
 			return types.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgQuotaSubscriptionInsufficient, map[string]any{"Error": errMsg})), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
+		if strings.Contains(errMsg, model.ErrQuotaBucketInsufficient.Error()) {
+			return types.NewErrorWithStatusCode(fmt.Errorf("用户额度桶余额不足: %s", errMsg), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
 		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
 
@@ -259,7 +266,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 func (s *BillingSession) reserveFunding(delta int, requireAvailableQuota bool) error {
 	switch funding := s.funding.(type) {
 	case *WalletFunding:
-		if requireAvailableQuota || funding.forceDB {
+		if model.IsQuotaBucketBillingEnabled() || requireAvailableQuota || funding.forceDB {
 			// Image quantity is known before submission, including retries and
 			// overrides. Reserve atomically instead of admitting wallet debt.
 			if err := funding.PreConsume(delta); err != nil {
@@ -298,10 +305,8 @@ func (s *BillingSession) reserveFunding(delta int, requireAvailableQuota bool) e
 func (s *BillingSession) rollbackFundingReserve(delta int) {
 	switch funding := s.funding.(type) {
 	case *WalletFunding:
-		if err := model.IncreaseUserQuota(funding.userId, delta, funding.forceDB); err != nil {
+		if err := funding.Settle(-delta); err != nil {
 			common.SysLog(common.LogText("error rolling back wallet funding reserve: %s", err.Error()))
-		} else {
-			funding.consumed -= delta
 		}
 	case *SubscriptionFunding:
 		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, -int64(delta)); err != nil {
@@ -344,6 +349,9 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 
 	switch s.funding.Source() {
 	case BillingSourceWallet:
+		if model.IsQuotaBucketBillingEnabled() {
+			return false
+		}
 		return float64(s.relayInfo.UserQuota) > trustQuota
 	case BillingSourceSubscription:
 		// 订阅不能启用信任旁路。原因：
@@ -373,6 +381,9 @@ func (s *BillingSession) syncRelayInfo() {
 	} else {
 		info.SubscriptionId = 0
 		info.SubscriptionPreConsumed = 0
+		if wallet, ok := s.funding.(*WalletFunding); ok {
+			info.BillingGroup = wallet.billingGroup
+		}
 	}
 }
 
@@ -387,6 +398,10 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	}
 
 	pref := common.NormalizeBillingPreference(relayInfo.UserSetting.BillingPreference)
+	channelId := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+	if channelId == 0 && relayInfo.ChannelMeta != nil {
+		channelId = relayInfo.ChannelId
+	}
 
 	// 钱包路径需要先检查用户额度
 	tryWallet := func() (*BillingSession, *types.NewAPIError) {
@@ -423,8 +438,14 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		session := &BillingSession{
 			relayInfo: relayInfo,
 			funding: &WalletFunding{
-				userId:  relayInfo.UserId,
-				forceDB: c.GetBool(forceImmediateQuotaBillingKey),
+				userId:       relayInfo.UserId,
+				requestId:    relayInfo.RequestId,
+				billingGroup: relayInfo.BillingGroup,
+				usingGroup:   relayInfo.UsingGroup,
+				modelName:    relayInfo.OriginModelName,
+				tokenId:      relayInfo.TokenId,
+				channelId:    channelId,
+				forceDB:      c.GetBool(forceImmediateQuotaBillingKey),
 			},
 			lang: i18n.StatedLang(c),
 		}

@@ -102,8 +102,12 @@ func UserCheckin(userId int) (*Checkin, error) {
 		}
 
 		// 步骤2: 在事务中增加用户额度
-		// 零奖励仍记为成功签到，避免 MySQL 对未变化行返回零影响行数。
-		if quotaAwarded > 0 {
+		if IsQuotaBucketBillingEnabled() {
+			if err := creditUserQuotaBucketTx(tx, userId, quotaAwarded, QuotaBucketSourceCheckin, checkin.CheckinDate, QuotaBucketBillingGroupDefault, true); err != nil {
+				return common.NewMessage("Check-in failed: quota update error")
+			}
+		} else if quotaAwarded > 0 {
+			// Zero rewards must still create the daily record on MySQL.
 			result := tx.Model(&User{}).Where("id = ? AND quota <= ?", userId, common.MaxWalletQuota-quotaAwarded).
 				Update("quota", gorm.Expr("quota + ?", quotaAwarded))
 			if result.Error != nil || result.RowsAffected != 1 {
