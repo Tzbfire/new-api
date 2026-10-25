@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -213,6 +214,52 @@ func TestQuotaBucketAdminOverridePreservesSpendableInflightRefund(t *testing.T) 
 	assert.Equal(t, 10, getBucketBalanceForTest(t, 311, "vip"))
 	assert.Equal(t, 105, getBucketBalanceForTest(t, 311, "default"))
 	assert.Equal(t, 115, getUserQuotaForPaymentGuardTest(t, 311))
+}
+
+func TestQuotaBucketStudioSettlementAndRefundStayInOriginalBucket(t *testing.T) {
+	truncateTables(t)
+	withQuotaBucketBilling(t)
+	insertQuotaBucketUser(t, 312, 50)
+	require.NoError(t, CreditUserQuotaBucket(312, 100, QuotaBucketSourceTopup, "studio-credit", "vip"))
+	meta := QuotaBucketChargeMeta{RequestID: "studio-hold", BillingGroup: "vip"}
+	_, err := DebitUserQuotaBuckets(312, 20, meta, QuotaBucketTxnTypePreConsume)
+	require.NoError(t, err)
+	task := &Task{TaskID: "studio-bucket", Platform: constant.TaskPlatformImageStudio, UserId: 312, Status: TaskStatusInProgress, Quota: 20, PrivateData: TaskPrivateData{RequestId: meta.RequestID, BillingSource: "wallet", BillingGroup: "vip"}}
+	insertTask(t, task)
+	require.NoError(t, SettleImageStudioPluginTask(task, 30, []byte(`{"plugin":{"settled":false}}`), false))
+	assert.Equal(t, 70, getBucketBalanceForTest(t, 312, "vip"))
+	require.NoError(t, SettleImageStudioPluginTask(task, 15, []byte(`{"plugin":{"settled":true}}`), true))
+	require.NoError(t, SettleImageStudioPluginTask(task, 15, []byte(`{"plugin":{"settled":true}}`), true))
+	assert.Equal(t, 85, getBucketBalanceForTest(t, 312, "vip"))
+	delta, err := ApplyTaskRefundTarget(task.TaskID, 312, 0, 15, meta)
+	require.NoError(t, err)
+	assert.Equal(t, 15, delta)
+	delta, err = ApplyTaskRefundTarget(task.TaskID, 312, 0, 15, meta)
+	require.NoError(t, err)
+	assert.Zero(t, delta)
+	assert.Equal(t, 100, getBucketBalanceForTest(t, 312, "vip"))
+	assert.Equal(t, 150, getUserQuotaForPaymentGuardTest(t, 312))
+	_, err = ApplyTaskRefundTarget(task.TaskID, 312, 0, 10, meta)
+	require.NoError(t, err)
+	assert.Equal(t, 95, getBucketBalanceForTest(t, 312, "vip"))
+}
+
+func TestQuotaBucketFailedStudioSettlementRollsBackFundsAndCheckpoint(t *testing.T) {
+	truncateTables(t)
+	withQuotaBucketBilling(t)
+	insertQuotaBucketUser(t, 313, 50)
+	require.NoError(t, CreditUserQuotaBucket(313, 10, QuotaBucketSourceTopup, "studio-small", "vip"))
+	meta := QuotaBucketChargeMeta{RequestID: "studio-insufficient", BillingGroup: "vip"}
+	_, err := DebitUserQuotaBuckets(313, 10, meta, QuotaBucketTxnTypePreConsume)
+	require.NoError(t, err)
+	task := &Task{TaskID: "studio-insufficient-task", Platform: constant.TaskPlatformImageStudio, UserId: 313, Status: TaskStatusInProgress, Quota: 10, PrivateData: TaskPrivateData{RequestId: meta.RequestID, BillingSource: "wallet", BillingGroup: "vip"}}
+	insertTask(t, task)
+	require.ErrorIs(t, SettleImageStudioPluginTask(task, 11, []byte(`{}`), true), ErrQuotaBucketInsufficient)
+	var stored Task
+	require.NoError(t, DB.First(&stored, task.ID).Error)
+	assert.Equal(t, 10, stored.Quota)
+	assert.Empty(t, stored.Data)
+	assert.Equal(t, 50, getUserQuotaForPaymentGuardTest(t, 313))
 }
 
 func TestQuotaBucketLegacyTaskRefundTargetCanBeCorrected(t *testing.T) {

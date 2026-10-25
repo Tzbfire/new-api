@@ -385,7 +385,7 @@ func RefundImageStudioTaskQuotaOnce(ctx context.Context, task *model.Task, reaso
 	if taskIsSubscription(task) {
 		subscriptionID = task.PrivateData.SubscriptionId
 	}
-	appliedDelta, err := model.ApplyTaskRefundTarget(task.TaskID, task.UserId, subscriptionID, task.Quota)
+	appliedDelta, err := model.ApplyTaskRefundTarget(task.TaskID, task.UserId, subscriptionID, task.Quota, model.QuotaBucketChargeMeta{RequestID: task.PrivateData.RequestId, BillingGroup: task.PrivateData.BillingGroup, UsingGroup: task.Group, ModelName: taskModelName(task), TokenId: task.PrivateData.TokenId, ChannelId: task.ChannelId, LegacyPreConsumed: task.Quota})
 	if err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("AI 画室退款失败 task %s: %s", task.TaskID, err.Error()))
 		return false, err

@@ -66,39 +66,39 @@ func estimateImageStudioBatchQuota(perImageQuota int, count uint) int {
 
 // estimateImageStudioPerImageQuota follows the same pricing path as execute-time
 // pre-consume, forced to n=1 so batch hold matches per-child billing.
-func estimateImageStudioPerImageQuota(c *gin.Context, imageRequest *dto.ImageRequest) (quota int, usingGroup string, err error) {
+func estimateImageStudioPerImageQuota(c *gin.Context, imageRequest *dto.ImageRequest) (quota int, usingGroup string, billingGroup string, err error) {
 	if imageRequest == nil {
-		return 0, "", fmt.Errorf("invalid image request")
+		return 0, "", "", fmt.Errorf("invalid image request")
 	}
-	if quota, group, claimed, pluginErr := estimateImageStudioPluginQuota(c, imageRequest); claimed || pluginErr != nil {
-		return quota, group, pluginErr
+	if quota, group, billingGroup, claimed, pluginErr := estimateImageStudioPluginQuota(c, imageRequest); claimed || pluginErr != nil {
+		return quota, group, billingGroup, pluginErr
 	}
 	one := uint(1)
 	imageRequest.N = &one
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatOpenAIImage, imageRequest, nil)
 	if err != nil {
-		return 0, "", err
+		return 0, "", "", err
 	}
 	relayInfo.InitChannelMeta(c)
 	billingInput, err := helper.BuildBillingExprRequestInputFromRequest(imageRequest, relayInfo.RequestHeaders)
 	if err != nil {
-		return 0, "", err
+		return 0, "", "", err
 	}
 	relayInfo.BillingRequestInput = &billingInput
 	meta := imageRequest.GetTokenCountMeta()
 	tokens, err := service.EstimateRequestToken(c, meta, relayInfo)
 	if err != nil {
-		return 0, "", err
+		return 0, "", "", err
 	}
 	relayInfo.SetEstimatePromptTokens(tokens)
 	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
 	if err != nil {
-		return 0, "", err
+		return 0, "", "", err
 	}
 	if priceData.QuotaToPreConsume < 0 {
-		return 0, relayInfo.UsingGroup, nil
+		return 0, relayInfo.UsingGroup, relayInfo.BillingGroup, nil
 	}
-	return priceData.QuotaToPreConsume, relayInfo.UsingGroup, nil
+	return priceData.QuotaToPreConsume, relayInfo.UsingGroup, relayInfo.BillingGroup, nil
 }
 
 // EstimateImageStudioCost follows the same pricing path used immediately
@@ -145,7 +145,7 @@ func EstimateImageStudioCost(c *gin.Context) {
 	} else {
 		c.Set("relay_mode", relayconstant.RelayModeImagesGenerations)
 	}
-	perImageQuota, usingGroup, err := estimateImageStudioPerImageQuota(c, imageRequest)
+	perImageQuota, usingGroup, _, err := estimateImageStudioPerImageQuota(c, imageRequest)
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
 		return
@@ -252,11 +252,15 @@ func CreateImageStudioTask(c *gin.Context) {
 
 	// Funding hold at submit so concurrent batches cannot oversell quota/subscription.
 	// Uses the same billing preference path as normal relay (subscription_first, etc.).
-	perImageQuota, _, err := estimateImageStudioPerImageQuota(c, imageRequest)
+	perImageQuota, usingGroup, billingGroup, err := estimateImageStudioPerImageQuota(c, imageRequest)
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
+	if usingGroup != "" {
+		relayInfo.UsingGroup = usingGroup
+	}
+	relayInfo.BillingGroup = billingGroup
 
 	batchID := "batch_" + common.GetUUID()
 	now := time.Now().Unix()
@@ -332,6 +336,7 @@ func CreateImageStudioTask(c *gin.Context) {
 				task.Quota = hold.Quota
 				task.PrivateData.StudioHeldQuota = hold.Quota
 				task.PrivateData.BillingSource = hold.Source
+				task.PrivateData.BillingGroup = hold.BillingGroup
 				task.PrivateData.SubscriptionId = hold.SubscriptionId
 			}
 		}
@@ -455,6 +460,7 @@ func runImageStudioClaimedTask(task *model.Task) {
 		service.SetImageStudioPreheldBilling(c, service.ImageStudioPrehold{
 			Quota:          task.PrivateData.StudioHeldQuota,
 			Source:         task.PrivateData.BillingSource,
+			BillingGroup:   task.PrivateData.BillingGroup,
 			SubscriptionId: task.PrivateData.SubscriptionId,
 			RequestId:      task.PrivateData.RequestId,
 		})
@@ -678,6 +684,17 @@ func releaseImageStudioUncommittedHold(userID int, task *model.Task) {
 		}
 		if err := model.RefundSubscriptionPreConsume(requestID); err != nil {
 			logger.LogError(context.Background(), fmt.Sprintf("release uncommitted image studio subscription hold user=%d quota=%d: %s", userID, held, err.Error()))
+		}
+		return
+	}
+	if model.IsQuotaBucketBillingEnabled() {
+		requestID := strings.TrimSpace(task.PrivateData.RequestId)
+		if requestID == "" {
+			logger.LogError(context.Background(), fmt.Sprintf("release uncommitted image studio bucket hold user=%d quota=%d: missing request id", userID, held))
+			return
+		}
+		if err := model.RefundUserQuotaBuckets(requestID); err != nil {
+			logger.LogError(context.Background(), fmt.Sprintf("release uncommitted image studio bucket hold user=%d quota=%d: %s", userID, held, err.Error()))
 		}
 		return
 	}

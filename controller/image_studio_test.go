@@ -24,6 +24,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -859,4 +860,25 @@ func publishReadyImageStudioTestAsset(t *testing.T, userID int, taskID string, d
 	require.NoError(t, err)
 	require.True(t, exists)
 	return asset, record
+}
+
+func TestReleaseImageStudioUncommittedHoldRestoresOriginalBucket(t *testing.T) {
+	setupImageStudioAssetDB(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.UserQuotaBucket{}, &model.UserQuotaBucketTransaction{}))
+	oldEnabled, oldRedis := setting.QuotaBucketBillingEnabled, common.RedisEnabled
+	setting.QuotaBucketBillingEnabled, common.RedisEnabled = true, false
+	t.Cleanup(func() { setting.QuotaBucketBillingEnabled, common.RedisEnabled = oldEnabled, oldRedis })
+	require.NoError(t, model.DB.Create(&model.User{Id: 9101, Username: "uncommitted-hold", Quota: 50}).Error)
+	require.NoError(t, model.CreditUserQuotaBucket(9101, 30, model.QuotaBucketSourceTopup, "uncommitted-credit", "vip"))
+	_, err := model.DebitUserQuotaBuckets(9101, 20, model.QuotaBucketChargeMeta{RequestID: "uncommitted-vip", BillingGroup: "vip"}, model.QuotaBucketTxnTypePreConsume)
+	require.NoError(t, err)
+	task := &model.Task{PrivateData: model.TaskPrivateData{RequestId: "uncommitted-vip", BillingSource: service.BillingSourceWallet, StudioHeldQuota: 20}}
+	releaseImageStudioUncommittedHold(9101, task)
+	releaseImageStudioUncommittedHold(9101, task)
+	vip, err := model.GetUserQuotaBucketBalance(9101, "vip")
+	require.NoError(t, err)
+	assert.Equal(t, 30, vip)
+	ordinary, err := model.GetUserQuotaBucketBalance(9101, "default")
+	require.NoError(t, err)
+	assert.Equal(t, 50, ordinary)
 }
