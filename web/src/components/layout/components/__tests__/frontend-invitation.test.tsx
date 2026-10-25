@@ -31,7 +31,7 @@ import {
   within,
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
 import { api } from '@/lib/api'
 
@@ -63,6 +63,8 @@ beforeEach(() => {
   document.cookie = 'factory_frontend=; Max-Age=0; Path=/'
   vi.spyOn(api, 'get').mockResolvedValue({ data: { success: true, data: {} } })
 })
+
+afterEach(() => vi.unstubAllGlobals())
 
 test('offers an optional preview on the legacy home page without selecting a version', async () => {
   await renderInvitation()
@@ -140,8 +142,12 @@ test.each([
 )
 
 test('does not interrupt browsing when preference storage is unavailable', async () => {
-  vi.spyOn(localStorage, 'getItem').mockImplementation(() => {
-    throw new Error('blocked')
+  // jsdom Storage is a proxy: replacing an instance method can silently
+  // become a stored value instead of intercepting browser API calls.
+  vi.stubGlobal('localStorage', {
+    getItem: () => {
+      throw new Error('blocked')
+    },
   })
   await renderInvitation()
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()

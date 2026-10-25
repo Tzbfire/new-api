@@ -1,6 +1,7 @@
 package model
 
 import (
+	"os"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -405,4 +406,29 @@ func TestQuotaBucketMigrationPreservesLegacyBalancesAndIsRepeatable(t *testing.T
 	assert.Equal(t, 70, getUserQuotaForPaymentGuardTest(t, 317))
 	require.NoError(t, CreditUserQuotaBucket(317, 30, QuotaBucketSourceTopup, "upgrade-paid", "vip"))
 	assert.Equal(t, 70, getUserQuotaForPaymentGuardTest(t, 317))
+}
+
+// CI seeds this database with the real pre-upgrade revision before starting this
+// test process. The fresh mode exercises the same startup migration without data.
+func TestQuotaBucketStartupMigrationCompatibility(t *testing.T) {
+	if os.Getenv("NEWAPI_TEST_MODE") == "" {
+		t.Skip("dedicated migration matrix only")
+	}
+	withQuotaBucketBilling(t)
+	for range 2 {
+		require.NoError(t, migrateDB())
+	}
+	if os.Getenv("NEWAPI_TEST_MODE") != "upgrade" {
+		return
+	}
+	assert.Equal(t, 50, getBucketBalanceForTest(t, 9001, "default"))
+	assert.Equal(t, 20, getBucketBalanceForTest(t, 9001, "vip"))
+	assert.Equal(t, 70, getUserQuotaForPaymentGuardTest(t, 9001))
+	require.NoError(t, CreditUserQuotaBucket(9001, 30, QuotaBucketSourceTopup, "ci-legacy-paid", "vip"))
+	assert.Equal(t, 70, getUserQuotaForPaymentGuardTest(t, 9001))
+	require.NoError(t, RefundUserQuotaBuckets("ci-legacy-debit"))
+	assert.Equal(t, 30, getBucketBalanceForTest(t, 9001, "vip"))
+	require.NoError(t, DB.Where("user_id = ?", 9001).Delete(&UserQuotaBucketTransaction{}).Error)
+	require.NoError(t, DB.Where("user_id = ?", 9001).Delete(&UserQuotaBucket{}).Error)
+	require.NoError(t, DB.Delete(&User{}, 9001).Error)
 }

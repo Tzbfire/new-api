@@ -47,7 +47,7 @@ describe('legacy rate limit rule adapters', () => {
 
     expect(rules).toHaveLength(7)
     expect(rateLimitOptionsFromRules(rules, options)).toEqual(options)
-    expect(rateLimitOptionsFromRules(rules.toReversed(), options)).toEqual(
+    expect(rateLimitOptionsFromRules([...rules].reverse(), options)).toEqual(
       options
     )
   })

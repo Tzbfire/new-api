@@ -1,6 +1,9 @@
 name: Fork CI
 
 on:
+  push:
+    branches:
+      - 'integrate/**'
   pull_request:
     branches:
       - main
@@ -15,11 +18,11 @@ concurrency:
 
 jobs:
   consumer:
-    if: github.repository == 'manyou116/new-api'
+    if: (github.repository == 'manyou116/new-api' || github.repository == 'Tzbfire/new-api')
     uses: ./.github/workflows/consumer-ci.yml
 
   backend:
-    if: github.repository == 'manyou116/new-api'
+    if: (github.repository == 'manyou116/new-api' || github.repository == 'Tzbfire/new-api')
     runs-on: ubuntu-latest
     steps:
       - name: Check out
@@ -42,8 +45,113 @@ jobs:
           (cd relaykit && GOWORK=off go build ./...)
           (cd tokenkit && GOWORK=off go build ./...)
 
+      - name: Verify request compression and model rate limits under race detection
+        run: >-
+          go test -race ./relay/channel ./middleware
+          -run 'Test(DoApiRequestGzip|DoApiRequestCompression|CompressedRequestHTTP2Retry|ModelRateLimit)'
+          -count=1 -timeout=180s
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - name: Verify consumer API flows against a disposable gateway
+        run: |
+          go build -o "$RUNNER_TEMP/new-api-consumer-test" .
+          NEW_API_TEST_BINARY="$RUNNER_TEMP/new-api-consumer-test" node consumer/tests/gateway-integration.mjs
+
+  frontend:
+    if: (github.repository == 'manyou116/new-api' || github.repository == 'Tzbfire/new-api')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.0'
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - name: Reject lint regressions against manyou baseline
+        run: |
+          baseline_dir="$RUNNER_TEMP/manyou-lint-baseline"
+          git worktree add --detach "$baseline_dir" f9b460860dddabaa05a8c289c752680db7701d14
+          trap 'git worktree remove --force "$baseline_dir"' EXIT
+          export LINT_BASELINE_DIR="$baseline_dir/web"
+          python3 ../scripts/check-frontend-lint.py
+      - run: bun run test --maxWorkers=2
+      - run: bun run build
+
+  database:
+    if: (github.repository == 'manyou116/new-api' || github.repository == 'Tzbfire/new-api')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, mysql, postgres]
+        mode: [fresh, upgrade]
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: merge-test-only
+          MYSQL_DATABASE: newapi_merge
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pmerge-test-only"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: merge-test-only
+          POSTGRES_DB: newapi_merge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    env:
+      NEWAPI_TEST_DB: ${{ matrix.database }}
+      NEWAPI_TEST_MODE: ${{ matrix.mode }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Configure disposable database
+        run: |
+          case "$NEWAPI_TEST_DB" in
+            sqlite) echo "NEWAPI_TEST_DSN=$RUNNER_TEMP/newapi-merge.db" >> "$GITHUB_ENV" ;;
+            mysql) echo 'NEWAPI_TEST_DSN=root:merge-test-only@tcp(127.0.0.1:3306)/newapi_merge?charset=utf8mb4&parseTime=True&loc=Local' >> "$GITHUB_ENV" ;;
+            postgres) echo 'NEWAPI_TEST_DSN=host=127.0.0.1 user=postgres password=merge-test-only dbname=newapi_merge port=5432 sslmode=disable' >> "$GITHUB_ENV" ;;
+          esac
+          mkdir -p web/dist
+          touch web/dist/index.html
+      - name: Seed database with previous fork revision
+        if: matrix.mode == 'upgrade'
+        run: scripts/test-manyou-upgrade.sh
+      - name: Verify startup twice and preserve old balances
+        run: go test ./model -run '^TestQuotaBucketStartupMigrationCompatibility$' -count=1
+      - name: Verify bucket accounting and affiliate rebates
+        run: NEWAPI_TEST_MODE= go test ./model -run 'Test(QuotaBucket|CreditUserQuotaBucket|DebitUserQuotaBuckets|PurchaseSubscriptionWithWallet|PurchaseSubscriptionWithBalanceDelegates|AffiliateUsageRebate)' -count=1
+      - name: Verify atomic check-in with ordinary and VIP buckets
+        if: matrix.mode == 'fresh'
+        env:
+          AUDIT_MYSQL_DSN: 'root:merge-test-only@tcp(127.0.0.1:3306)/newapi_merge?charset=utf8mb4&parseTime=True&loc=Local'
+          AUDIT_POSTGRES_DSN: 'postgres://postgres:merge-test-only@127.0.0.1:5432/newapi_merge?sslmode=disable'
+        run: go test ./controller -run "^TestCheckinDatabaseMatrix/${NEWAPI_TEST_DB}/" -count=1 -v
+
   container:
-    if: github.repository == 'manyou116/new-api'
+    if: (github.repository == 'manyou116/new-api' || github.repository == 'Tzbfire/new-api')
     runs-on: ubuntu-latest
     steps:
       - name: Check out
