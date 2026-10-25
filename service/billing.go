@@ -303,6 +303,9 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 			return err
 		}
 		notifyBillingSettlementObserver(ctx, relayInfo, actualQuota)
+		if err := recordSynchronousAffiliateRebate(relayInfo, actualQuota); err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("record affiliate usage rebate failed: %v", err))
+		}
 
 		// 发送额度通知（订阅计费使用订阅剩余额度）
 		if actualQuota != 0 {
@@ -323,6 +326,9 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 		}
 	}
 	notifyBillingSettlementObserver(ctx, relayInfo, actualQuota)
+	if err := recordSynchronousAffiliateRebate(relayInfo, actualQuota); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("record affiliate usage rebate failed: %v", err))
+	}
 	return nil
 }
 
@@ -340,4 +346,11 @@ func SettleImageStudioPluginTask(c *gin.Context, task *model.Task, actualQuota i
 		return fmt.Errorf("image studio plugin checkpoint is missing")
 	}
 	return model.SettleImageStudioPluginTask(task, actualQuota, checkpointData, checkpoint.Plugin.Settled)
+}
+
+func recordSynchronousAffiliateRebate(info *relaycommon.RelayInfo, quota int) error {
+	if info.RelayFormat == types.RelayFormatTask {
+		return nil
+	}
+	return model.RecordAffiliateUsageRebateFromBilling(info.RequestId, info.UserId, info.BillingSource, info.BillingGroup, info.SubscriptionId, quota)
 }

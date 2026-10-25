@@ -220,6 +220,9 @@ func TestQuotaBucketStudioSettlementAndRefundStayInOriginalBucket(t *testing.T) 
 	truncateTables(t)
 	withQuotaBucketBilling(t)
 	insertQuotaBucketUser(t, 312, 50)
+	withAffiliateUsageRebate(t, 1000, QuotaBucketBillingGroupDefault)
+	require.NoError(t, DB.Create(&User{Id: 912, Username: "studio-inviter", AffCode: "studio-inviter", Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", 312).Update("inviter_id", 912).Error)
 	require.NoError(t, CreditUserQuotaBucket(312, 100, QuotaBucketSourceTopup, "studio-credit", "vip"))
 	meta := QuotaBucketChargeMeta{RequestID: "studio-hold", BillingGroup: "vip"}
 	_, err := DebitUserQuotaBuckets(312, 20, meta, QuotaBucketTxnTypePreConsume)
@@ -231,6 +234,11 @@ func TestQuotaBucketStudioSettlementAndRefundStayInOriginalBucket(t *testing.T) 
 	require.NoError(t, SettleImageStudioPluginTask(task, 15, []byte(`{"plugin":{"settled":true}}`), true))
 	require.NoError(t, SettleImageStudioPluginTask(task, 15, []byte(`{"plugin":{"settled":true}}`), true))
 	assert.Equal(t, 85, getBucketBalanceForTest(t, 312, "vip"))
+	// Final settlement may still lose the success CAS to timeout. No rebate
+	// is eligible until the task has actually published a successful result.
+	var events int64
+	require.NoError(t, DB.Model(&AffiliateUsageRebateEvent{}).Count(&events).Error)
+	assert.Zero(t, events)
 	delta, err := ApplyTaskRefundTarget(task.TaskID, 312, 0, 15, meta)
 	require.NoError(t, err)
 	assert.Equal(t, 15, delta)
@@ -389,7 +397,7 @@ func TestQuotaBucketMigrationPreservesLegacyBalancesAndIsRepeatable(t *testing.T
 	_, err := DebitUserQuotaBuckets(317, 10, QuotaBucketChargeMeta{RequestID: "upgrade-spend", BillingGroup: "vip"}, QuotaBucketTxnTypePreConsume)
 	require.NoError(t, err)
 	for range 2 {
-		require.NoError(t, DB.AutoMigrate(&UserQuotaBucket{}, &UserQuotaBucketTransaction{}, &UserSubscription{}))
+		require.NoError(t, DB.AutoMigrate(&UserQuotaBucket{}, &UserQuotaBucketTransaction{}, &AffiliateUsageRebateEvent{}, &AffiliateDailyRebateSettlement{}, &UserSubscription{}))
 		require.NoError(t, EnsureUserQuotaBucketsMigrated(317))
 	}
 	assert.Equal(t, 50, getBucketBalanceForTest(t, 317, "default"))

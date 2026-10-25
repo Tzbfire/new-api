@@ -497,6 +497,8 @@ func runImageStudioClaimedTask(task *model.Task) {
 	} else if !won {
 		cleanupImageStudioPayloadAssets(context.Background(), task, payload)
 		refundImageStudioChargeAfterLostFinalUpdate(task, task.PrivateData.RequestId)
+	} else {
+		service.RecordTaskAffiliateRebate(context.Background(), task)
 	}
 }
 

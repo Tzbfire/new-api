@@ -569,3 +569,12 @@ func EvaluateTaskCompletionUsage(snap *billingexpr.BillingSnapshot, facts map[st
 	}
 	return result, usage, err
 }
+
+func RecordTaskAffiliateRebate(ctx context.Context, task *model.Task) {
+	if task == nil || task.Status != model.TaskStatusSuccess {
+		return
+	}
+	if err := model.RecordAffiliateUsageRebateFromBilling(task.PrivateData.RequestId, task.UserId, task.PrivateData.BillingSource, task.PrivateData.BillingGroup, task.PrivateData.SubscriptionId, task.Quota); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("failed to record task affiliate rebate: %s", err))
+	}
+}

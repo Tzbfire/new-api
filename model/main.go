@@ -375,6 +375,8 @@ func migrateDB() error {
 		&SubscriptionPreConsumeRecord{},
 		&UserQuotaBucket{},
 		&UserQuotaBucketTransaction{},
+		&AffiliateUsageRebateEvent{},
+		&AffiliateDailyRebateSettlement{},
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
 		&PerfMetric{},

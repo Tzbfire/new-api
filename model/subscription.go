@@ -739,6 +739,9 @@ func purchaseSubscriptionWithPaidQuota(userId int, planId int, requireBalancePay
 		if err != nil {
 			return err
 		}
+		if err := RecordAffiliateUsageRebateFromWalletPurchaseTx(tx, tradeNo, userId, billingGroup, chargedQuota); err != nil {
+			return err
+		}
 		order := &SubscriptionOrder{
 			UserId:          userId,
 			PlanId:          plan.Id,
@@ -835,6 +838,9 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		}
 		if subscription.PrevUserGroup != "" {
 			upgradeGroup = strings.TrimSpace(subscription.UpgradeGroup)
+		}
+		if err := RecordAffiliateUsageRebateFromSubscriptionOrderPurchaseTx(tx, order.TradeNo, order.UserId, plan, order.PaymentProvider); err != nil {
+			return err
 		}
 		order.PaymentMethod = paymentMethod
 		if err := upsertSubscriptionTopUpTx(tx, &order); err != nil {

@@ -80,6 +80,33 @@ func validateImageStudioRetentionDays(value string) error {
 	return nil
 }
 
+func validateAffiliateRebateBps(value string) error {
+	bps, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || bps < 0 || bps > 10000 {
+		return common.NewMessage("Affiliate rebate rate must be an integer between 0 and 10000 basis points")
+	}
+	return nil
+}
+
+func validateAffiliateRebateHour(value string) error {
+	hour, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || hour < 0 || hour > 23 {
+		return common.NewMessage("Affiliate rebate settlement hour must be an integer between 0 and 23")
+	}
+	return nil
+}
+
+func validateAffiliateRebateGroup(value string) error {
+	group := strings.TrimSpace(value)
+	if group == "" {
+		return common.NewMessage("Affiliate rebate bucket group is required")
+	}
+	if len(group) > 64 {
+		return common.NewMessage("Affiliate rebate bucket group must not exceed 64 characters")
+	}
+	return nil
+}
+
 func collectModelNamesFromOptionValue(raw string, modelNames map[string]struct{}) {
 	if strings.TrimSpace(raw) == "" {
 		return
@@ -265,6 +292,21 @@ func UpdateOption(c *gin.Context) {
 		}
 	}
 	switch option.Key {
+	case "AffiliateUsageRebateBps":
+		if err := validateAffiliateRebateBps(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "AffiliateUsageRebateHour":
+		if err := validateAffiliateRebateHour(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "AffiliateUsageRebateGroup":
+		if err := validateAffiliateRebateGroup(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
 	case "ImageStudioBatchConcurrency":
 		if err := validateImageStudioBatchConcurrency(option.Value.(string)); err != nil {
 			common.ApiErrorMsg(c, err.Error())

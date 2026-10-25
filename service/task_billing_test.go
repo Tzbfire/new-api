@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -100,6 +101,8 @@ func TestMain(m *testing.M) {
 		&model.SystemTaskLock{},
 		&model.UserQuotaBucket{},
 		&model.UserQuotaBucketTransaction{},
+		&model.AffiliateUsageRebateEvent{},
+		&model.AffiliateDailyRebateSettlement{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -132,6 +135,8 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM system_tasks")
 		model.DB.Exec("DELETE FROM user_quota_buckets")
 		model.DB.Exec("DELETE FROM user_quota_bucket_transactions")
+		model.DB.Exec("DELETE FROM affiliate_usage_rebate_events")
+		model.DB.Exec("DELETE FROM affiliate_daily_rebate_settlements")
 	})
 }
 
@@ -2044,4 +2049,41 @@ func TestAdoptZeroImageStudioPreholdBoundsLaterReservation(t *testing.T) {
 	assert.Equal(t, 40, getUserQuota(t, userID))
 	require.NoError(t, SettleBilling(ctx, info, 60))
 	assert.Equal(t, 40, getUserQuota(t, userID))
+}
+
+func TestTaskAffiliateRebateWaitsForSuccessfulCompletion(t *testing.T) {
+	truncate(t)
+	oldBucket, oldPaid := setting.QuotaBucketBillingEnabled, setting.PaidQuotaBillingGroup
+	oldEnabled, oldBps := setting.AffiliateUsageRebateEnabled, setting.AffiliateUsageRebateBps
+	setting.QuotaBucketBillingEnabled, setting.PaidQuotaBillingGroup = true, "vip"
+	setting.AffiliateUsageRebateEnabled, setting.AffiliateUsageRebateBps = true, 1000
+	t.Cleanup(func() {
+		setting.QuotaBucketBillingEnabled, setting.PaidQuotaBillingGroup = oldBucket, oldPaid
+		setting.AffiliateUsageRebateEnabled, setting.AffiliateUsageRebateBps = oldEnabled, oldBps
+	})
+	require.NoError(t, model.DB.Create(&model.User{Id: 901, Username: "rebate-inviter", AffCode: "rebate-901", Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 902, Username: "rebate-invitee", AffCode: "rebate-902", Status: common.UserStatusEnabled, InviterId: 901}).Error)
+	for _, requestID := range []string{"rebate-success", "rebate-failure"} {
+		require.NoError(t, model.CreditUserQuotaBucket(902, 100, model.QuotaBucketSourceTopup, requestID, "vip"))
+		_, err := model.DebitUserQuotaBuckets(902, 100, model.QuotaBucketChargeMeta{RequestID: requestID, BillingGroup: "vip"}, model.QuotaBucketTxnTypePreConsume)
+		require.NoError(t, err)
+		info := &relaycommon.RelayInfo{RelayFormat: "task", RequestId: requestID, UserId: 902, BillingSource: BillingSourceWallet, BillingGroup: "vip"}
+		require.NoError(t, recordSynchronousAffiliateRebate(info, 100))
+		var count int64
+		require.NoError(t, model.DB.Model(&model.AffiliateUsageRebateEvent{}).Count(&count).Error)
+		if requestID == "rebate-success" {
+			assert.Zero(t, count)
+			task := &model.Task{TaskID: requestID, UserId: 902, Quota: 100, Status: model.TaskStatusSuccess, PrivateData: model.TaskPrivateData{RequestId: requestID, BillingSource: BillingSourceWallet, BillingGroup: "vip"}}
+			RecordTaskAffiliateRebate(context.Background(), task)
+			RecordTaskAffiliateRebate(context.Background(), task)
+		} else {
+			require.NoError(t, model.RefundUserQuotaBuckets(requestID))
+			RecordTaskAffiliateRebate(context.Background(), &model.Task{UserId: 902, Quota: 100, Status: model.TaskStatusFailure, PrivateData: model.TaskPrivateData{RequestId: requestID, BillingSource: BillingSourceWallet, BillingGroup: "vip"}})
+		}
+	}
+	var events []model.AffiliateUsageRebateEvent
+	require.NoError(t, model.DB.Find(&events).Error)
+	require.Len(t, events, 1)
+	assert.Equal(t, "rebate-success", events[0].RequestId)
+	assert.Equal(t, int64(100), events[0].EligibleQuota)
 }

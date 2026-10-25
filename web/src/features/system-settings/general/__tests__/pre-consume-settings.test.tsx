@@ -45,6 +45,10 @@ function Fixture() {
             QuotaForInviter: 0,
             QuotaForInvitee: 0,
             TopUpLink: '',
+            AffiliateUsageRebateEnabled: false,
+            AffiliateUsageRebateBps: 1000,
+            AffiliateUsageRebateGroup: 'default',
+            AffiliateUsageRebateHour: 0,
             quota_setting: {
               enable_free_model_pre_consume: true,
               trust_quota_usd: 10,
@@ -145,3 +149,15 @@ test.each(['', '-1'])(
     expect(api.put).not.toHaveBeenCalled()
   }
 )
+
+
+test('affiliate percentage saves basis points with the existing quota settings', async () => {
+  const user = userEvent.setup()
+  await renderSettings()
+  await user.click(screen.getByRole('switch', { name: 'Affiliate Usage Rebate' }))
+  const percentage = screen.getByRole('spinbutton', { name: 'Affiliate Rebate Percentage' })
+  fireEvent.change(percentage, { target: { value: '12.5' } })
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() => expect(api.put).toHaveBeenCalledWith('/api/option/', { key: 'AffiliateUsageRebateBps', value: 1250 }))
+  expect(api.put).toHaveBeenCalledWith('/api/option/', { key: 'AffiliateUsageRebateEnabled', value: true })
+})
