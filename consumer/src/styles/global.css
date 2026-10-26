@@ -908,6 +908,12 @@ summary {
   color: var(--muted);
   font-size: 10px;
 }
+.balance-action > a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
 .sidebar-tools {
   display: flex;
   align-items: center;

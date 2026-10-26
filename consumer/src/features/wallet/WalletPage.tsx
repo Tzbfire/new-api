@@ -23,6 +23,7 @@ import {
 } from './api'
 import './wallet.css'
 import { PaymentReturnStatus } from './PaymentReturnStatus'
+import { CheckinButton } from '@/features/checkin'
 
 export default function WalletPage() {
   const { t, i18n } = useTranslation()
@@ -209,6 +210,7 @@ export default function WalletPage() {
             <span className="row">
               <Wallet size={19} aria-hidden />
               {t('Wallet balance')}
+              <CheckinButton />
             </span>
             <strong className="balance-number">
               {formatBalance(session.user?.quota || 0, site.data, locale)}

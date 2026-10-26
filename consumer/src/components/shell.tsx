@@ -29,6 +29,7 @@ import { Preferences } from './preferences'
 import { FrontendEntry } from './frontend-entry'
 import { AnnouncementButton } from '@/features/announcements'
 import { Brand } from './brand'
+import { CheckinButton, CheckinProvider } from '@/features/checkin'
 const creativeNav = [
   { to: '/model-pricing', label: 'Models and pricing', icon: Boxes },
   { to: '/chat', label: 'Chat', icon: MessageCircle },
@@ -122,18 +123,24 @@ export function AppShell() {
       </nav>
       <div className="sidebar-bottom">
         {user && (
-          <Link to="/wallet" className="balance-mini">
-            <span className="row">
-              <Sparkles size={16} />
-              {t('Available balance')}
-            </span>
-            <strong>{formatBalance(user.quota, status.data, i18n.language)}</strong>
-            <span className="balance-action">
-              {t('Add balance')}
-              <ChevronRight size={15} />
-            </span>
-          </Link>
+          <div className="balance-mini">
+            <Link to="/wallet">
+              <span className="row">
+                <Sparkles size={16} />
+                {t('Available balance')}
+              </span>
+              <strong>{formatBalance(user.quota, status.data, i18n.language)}</strong>
+            </Link>
+            <div className="balance-action">
+              <Link to="/wallet">
+                {t('Add balance')}
+                <ChevronRight size={15} />
+              </Link>
+              <CheckinButton compact />
+            </div>
+          </div>
         )}
+        <CheckinButton className="sidebar-checkin-shortcut" iconOnly />
         <div className="sidebar-tools">
           <Button
             variant="ghost"
@@ -166,74 +173,83 @@ export function AppShell() {
     </>
   )
   return (
-    <div
-      className={`app-shell ${isChat ? 'is-chat' : ''} ${navCollapsed ? 'is-nav-collapsed' : ''}`}
-    >
-      <a className="skip-link" href="#main-content">
-        {t('Skip to content')}
-      </a>
-      <aside className="sidebar">{nav}</aside>
-      <div className="mobile-header">
-        <Brand />
-        <Button
-          variant="ghost"
-          className="icon-button"
-          aria-label={t('Open navigation')}
-          aria-expanded={mobileOpen}
-          onClick={() => setMobileOpen(true)}
-        >
-          <Menu size={22} />
-        </Button>
-      </div>
-      <Modal open={mobileOpen} onClose={() => setMobileOpen(false)} title={t('Your space')}>
-        <div className="mobile-nav">{nav}</div>
-      </Modal>
-      <main
-        id="main-content"
-        className={`workspace ${isStudio ? 'workspace-studio' : ''}`}
-        tabIndex={-1}
+    <CheckinProvider>
+      <div
+        className={`app-shell ${isChat ? 'is-chat' : ''} ${navCollapsed ? 'is-nav-collapsed' : ''}`}
       >
-        {!isChat && (
-          <div className="frontend-entry-toolbar">
-            <AnnouncementButton />
-            <FrontendEntry workspace />
+        <a className="skip-link" href="#main-content">
+          {t('Skip to content')}
+        </a>
+        <aside className="sidebar">{nav}</aside>
+        <div className="mobile-header">
+          <Brand />
+          <div className="row">
+            <CheckinButton iconOnly />
+            <Button
+              variant="ghost"
+              className="icon-button"
+              aria-label={t('Open navigation')}
+              aria-expanded={mobileOpen}
+              onClick={() => setMobileOpen(true)}
+            >
+              <Menu size={22} />
+            </Button>
           </div>
-        )}
-        <div key={location.pathname} className="workspace-route">
-          <Suspense fallback={<LoadingState />}>
-            <Outlet />
-          </Suspense>
         </div>
-      </main>
-      <Modal open={helpOpen} onClose={() => setHelpOpen(false)} title={t('A good place to start')}>
-        <div className="stack help-links">
-          <Link to="/chat" onClick={() => setHelpOpen(false)}>
-            <MessageCircle />
-            <span>
-              <strong>{t('Ask your first question')}</strong>
-              <small>{t('Choose a model and start a conversation.')}</small>
-            </span>
-            <ArrowIcon />
-          </Link>
-          <Link to="/studio" onClick={() => setHelpOpen(false)}>
-            <ImagePlus />
-            <span>
-              <strong>{t('Create your first image')}</strong>
-              <small>{t('Describe your idea and review the price before creating.')}</small>
-            </span>
-            <ArrowIcon />
-          </Link>
-          <Link to="/model-pricing" onClick={() => setHelpOpen(false)}>
-            <Boxes />
-            <span>
-              <strong>{t('Find your service plan')}</strong>
-              <small>{t('Compare models and transparent pricing.')}</small>
-            </span>
-            <ArrowIcon />
-          </Link>
-        </div>
-      </Modal>
-    </div>
+        <Modal open={mobileOpen} onClose={() => setMobileOpen(false)} title={t('Your space')}>
+          <div className="mobile-nav">{nav}</div>
+        </Modal>
+        <main
+          id="main-content"
+          className={`workspace ${isStudio ? 'workspace-studio' : ''}`}
+          tabIndex={-1}
+        >
+          {!isChat && (
+            <div className="frontend-entry-toolbar">
+              <AnnouncementButton />
+              <FrontendEntry workspace />
+            </div>
+          )}
+          <div key={location.pathname} className="workspace-route">
+            <Suspense fallback={<LoadingState />}>
+              <Outlet />
+            </Suspense>
+          </div>
+        </main>
+        <Modal
+          open={helpOpen}
+          onClose={() => setHelpOpen(false)}
+          title={t('A good place to start')}
+        >
+          <div className="stack help-links">
+            <Link to="/chat" onClick={() => setHelpOpen(false)}>
+              <MessageCircle />
+              <span>
+                <strong>{t('Ask your first question')}</strong>
+                <small>{t('Choose a model and start a conversation.')}</small>
+              </span>
+              <ArrowIcon />
+            </Link>
+            <Link to="/studio" onClick={() => setHelpOpen(false)}>
+              <ImagePlus />
+              <span>
+                <strong>{t('Create your first image')}</strong>
+                <small>{t('Describe your idea and review the price before creating.')}</small>
+              </span>
+              <ArrowIcon />
+            </Link>
+            <Link to="/model-pricing" onClick={() => setHelpOpen(false)}>
+              <Boxes />
+              <span>
+                <strong>{t('Find your service plan')}</strong>
+                <small>{t('Compare models and transparent pricing.')}</small>
+              </span>
+              <ArrowIcon />
+            </Link>
+          </div>
+        </Modal>
+      </div>
+    </CheckinProvider>
   )
 }
 function ArrowIcon() {

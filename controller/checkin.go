@@ -20,23 +20,25 @@ func GetCheckinStatus(c *gin.Context) {
 	}
 	userId := c.GetInt("id")
 	// 获取月份参数，默认为当前月份
-	month := c.DefaultQuery("month", time.Now().Format("2006-01"))
+	now := time.Now()
+	month := c.DefaultQuery("month", now.Format("2006-01"))
+	if _, err := time.Parse("2006-01", month); err != nil {
+		common.ApiErrorT(c, "Invalid parameters")
+		return
+	}
 
-	stats, err := model.GetUserCheckinStats(userId, month)
+	stats, err := model.GetUserCheckinStats(userId, month, now)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data": gin.H{
-			"enabled":   setting.Enabled,
-			"min_quota": setting.MinQuota,
-			"max_quota": setting.MaxQuota,
-			"stats":     stats,
-		},
-	})
+	data := checkinDayMetadata(now)
+	data["enabled"] = setting.Enabled
+	data["min_quota"] = setting.MinQuota
+	data["max_quota"] = setting.MaxQuota
+	data["stats"] = stats
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": data})
 }
 
 // DoCheckin 执行用户签到
@@ -55,8 +57,20 @@ func DoCheckin(c *gin.Context) {
 		return
 	}
 	model.RecordLog(userId, model.LogTypeSystem, common.NewMessage("Daily check-in, received {{quota}}", map[string]any{"quota": logger.FormatQuota(checkin.QuotaAwarded)}))
-	common.ApiSuccessT(c, "Check-in successful", gin.H{
-		"quota_awarded": checkin.QuotaAwarded,
-		"checkin_date":  checkin.CheckinDate,
-	})
+	data := checkinDayMetadata(time.Unix(checkin.CreatedAt, 0).In(time.Local))
+	data["quota_awarded"] = checkin.QuotaAwarded
+	data["checkin_date"] = checkin.CheckinDate
+	common.ApiSuccessT(c, "Check-in successful", data)
+}
+
+// checkinDayMetadata keeps the displayed day and refresh deadline on the same
+// server calendar used to issue rewards. The UTC offset is display text, not
+// an IANA timezone identifier; time.Local may otherwise be named only "Local".
+func checkinDayMetadata(now time.Time) gin.H {
+	return gin.H{
+		"today":         now.Format("2006-01-02"),
+		"server_time":   now.Unix(),
+		"next_reset_at": time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location()).Unix(),
+		"timezone":      now.Format("UTC-07:00"),
+	}
 }

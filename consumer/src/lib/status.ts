@@ -23,6 +23,7 @@ export interface SiteStatus {
   email_verification?: boolean
   turnstile_check?: boolean
   turnstile_site_key?: string
+  checkin_enabled?: boolean
   passkey_login?: boolean
   passkey_rp_id?: string
   passkey_rp_ids?: string[]
