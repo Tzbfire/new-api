@@ -1317,6 +1317,30 @@ test('editing opens the shared configuration and omits an unchanged key on updat
   expect(put.mock.calls[0]?.[1]).not.toHaveProperty('key')
 })
 
+test('channel drawer saves gzip request compression without losing other header overrides', async () => {
+  editingChannel.header_override = JSON.stringify({ 'X-Trace': 'keep' })
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const user = userEvent.setup()
+  render(<ConfigurationHarness currentRow={editingChannel} />)
+  await screen.findByDisplayValue('Existing channel')
+  await user.click(screen.getByRole('tab', { name: /Request & Response/ }))
+  const toggle = within(
+    screen.getByRole('group', { name: 'Override Rules' })
+  ).getByRole('switch', { name: 'Compress upstream JSON requests (gzip)' })
+  expect(toggle).not.toBeChecked()
+  await user.click(toggle)
+  expect(toggle).toBeChecked()
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  await waitFor(() => expect(put).toHaveBeenCalled())
+  const payload = put.mock.calls[0]?.[1] as { header_override: string }
+  expect(JSON.parse(payload.header_override)).toEqual({
+    'X-Trace': 'keep',
+    'Content-Encoding': 'gzip',
+  })
+})
+
 test('editing legacy channels retains the full provider list and saves the original type', async () => {
   editingChannel = { ...editingChannel, type: 55 }
   pluginOptions = [

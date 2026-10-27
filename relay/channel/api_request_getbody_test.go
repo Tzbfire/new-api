@@ -1,8 +1,11 @@
 package channel
 
 import (
+	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -22,6 +25,173 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
 )
+
+type gzipTestAdaptor struct {
+	Adaptor
+	url string
+}
+
+func (a *gzipTestAdaptor) GetRequestURL(*relaycommon.RelayInfo) (string, error) {
+	return a.url, nil
+}
+
+func (a *gzipTestAdaptor) SetupRequestHeader(c *gin.Context, headers *http.Header, _ *relaycommon.RelayInfo) error {
+	headers.Set("Content-Type", c.GetHeader("Content-Type"))
+	return nil
+}
+
+func TestDoApiRequestGzip(t *testing.T) {
+	service.InitHttpClient()
+	gin.SetMode(gin.TestMode)
+	payload := []byte(`{"input":"` + strings.Repeat("large context with repeated code and tool output; ", 2048) + `"}`)
+	var encoded bytes.Buffer
+	writer := gzip.NewWriter(&encoded)
+	_, err := writer.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	// The transport trusts Content-Type; even opaque data must not grow on wire.
+	incompressible := make([]byte, 64<<10)
+	for offset := 0; offset < len(incompressible); offset += sha256.Size {
+		block := sha256.Sum256(fmt.Appendf(nil, "%d", offset))
+		copy(incompressible[offset:], block[:])
+	}
+
+	for _, tt := range []struct {
+		name        string
+		body        []byte
+		contentType string
+		optIn       bool
+		unknownSize bool
+		wantGzip    bool
+	}{
+		{name: "large JSON", body: payload, contentType: "application/json; charset=utf-8", optIn: true, wantGzip: true},
+		{name: "JSON suffix", body: payload, contentType: "application/problem+json", optIn: true, wantGzip: true},
+		{name: "default off", body: payload, contentType: "application/json"},
+		{name: "small JSON", body: []byte(`{"input":"hello"}`), contentType: "application/json", optIn: true},
+		{name: "multipart", body: payload, contentType: "multipart/form-data; boundary=test", optIn: true},
+		{name: "unknown size", body: payload, contentType: "application/json", optIn: true, unknownSize: true},
+		{name: "already gzip", body: encoded.Bytes(), contentType: "application/json", optIn: true, wantGzip: true},
+		{name: "already gzip unknown size", body: encoded.Bytes(), contentType: "application/json", optIn: true, unknownSize: true, wantGzip: true},
+		{name: "no size benefit", body: incompressible, contentType: "application/json", optIn: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			type receivedRequest struct {
+				encoding string
+				length   int64
+				body     []byte
+				err      error
+			}
+			received := make(chan receivedRequest, 1)
+			const event = "data: {\"output\":\"hello\"}\n\n"
+			streamContext, finishStream := context.WithCancel(context.Background())
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				received <- receivedRequest{r.Header.Get("Content-Encoding"), r.ContentLength, body, err}
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, event)
+				w.(http.Flusher).Flush()
+				<-streamContext.Done()
+			}))
+			defer server.Close()
+			defer finishStream()
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			ctx.Request.Header.Set("Content-Type", tt.contentType)
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, IsStream: true}
+			if tt.optIn {
+				info.HeadersOverride = map[string]any{"Content-Encoding": "gzip"}
+			}
+			body, closer, err := relaycommon.NewOutboundJSONBody(tt.body)
+			require.NoError(t, err)
+			defer closer.Close()
+			var reader io.Reader = body
+			if tt.unknownSize {
+				reader = io.LimitReader(body, int64(len(tt.body)))
+			}
+			send := DoApiRequest
+			if strings.HasPrefix(tt.contentType, "multipart/") {
+				send = DoFormRequest
+			}
+			resp, err := send(&gzipTestAdaptor{url: server.URL}, ctx, info, reader)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			got := <-received
+			require.NoError(t, got.err)
+			if tt.wantGzip {
+				require.Equal(t, "gzip", got.encoding)
+				assert.Less(t, len(got.body), len(payload))
+				if !tt.unknownSize {
+					assert.EqualValues(t, len(got.body), got.length)
+				}
+				decoder, err := gzip.NewReader(bytes.NewReader(got.body))
+				require.NoError(t, err)
+				decoded, err := io.ReadAll(decoder)
+				require.NoError(t, err)
+				require.NoError(t, decoder.Close())
+				assert.Equal(t, payload, decoded)
+			} else {
+				assert.Empty(t, got.encoding)
+				assert.Equal(t, tt.body, got.body)
+			}
+			responseBody, err := bufio.NewReader(resp.Body).ReadString('\n')
+			require.NoError(t, err)
+			finishStream()
+			assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+			assert.Empty(t, resp.Header.Get("Content-Encoding"))
+			assert.Equal(t, strings.TrimSuffix(event, "\n"), responseBody, "first SSE event must arrive before the upstream closes")
+		})
+	}
+}
+
+func TestGzipRequestHTTP2Retry(t *testing.T) {
+	payload := []byte(`{"input":"` + strings.Repeat("HTTP2 retry with a large context; ", 4096) + `"}`)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	results := runResetOnFirstStreamServer(ln, true)
+	client, transport := newH2PriorKnowledgeClient(ln)
+	defer transport.CloseIdleConnections()
+	body, storage := newPassThroughBody(t, payload)
+	defer storage.Close()
+	req, err := http.NewRequest(http.MethodPost, "http://upstream.test/v1/responses", body)
+	require.NoError(t, err)
+	ApplyUpstreamBodyMetadata(req, body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Content-Length", fmt.Sprint(len(payload)))
+	req.TransferEncoding = []string{"chunked"}
+	require.NoError(t, compressUpstreamJSONRequest(req))
+	assert.Empty(t, req.Header.Get("Content-Length"))
+	assert.Empty(t, req.TransferEncoding)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, 2, resp.ProtoMajor)
+	result := awaitH2ServerResult(t, results)
+	require.NoError(t, result.err)
+	require.Len(t, result.attemptBodies, 2)
+	assert.Equal(t, result.attemptBodies[0], result.attemptBodies[1])
+	assert.EqualValues(t, len(result.attemptBodies[0]), req.ContentLength)
+	decoder, err := gzip.NewReader(bytes.NewReader(result.attemptBodies[1]))
+	require.NoError(t, err)
+	decoded, err := io.ReadAll(decoder)
+	require.NoError(t, err)
+	require.NoError(t, decoder.Close())
+	assert.Equal(t, payload, decoded)
+	for range 2 {
+		replay, err := req.GetBody()
+		require.NoError(t, err)
+		data, err := io.ReadAll(replay)
+		require.NoError(t, err)
+		require.NoError(t, replay.Close())
+		assert.Equal(t, result.attemptBodies[0], data)
+	}
+	stored, err := storage.Bytes()
+	require.NoError(t, err, "closing the old request body must not close shared storage")
+	assert.Equal(t, payload, stored)
+}
 
 func TestApplyUpstreamBodyMetadataSetsReplayableMetadata(t *testing.T) {
 	t.Parallel()

@@ -26,7 +26,7 @@ export const HEADER_PASSTHROUGH_ALL_KEY = '*'
 
 export type HeaderPassthroughState = 'enabled' | 'disabled' | 'invalid'
 
-function parseHeaderOverrideObject(
+export function parseHeaderOverrideObject(
   headerOverride: string | undefined
 ): Record<string, unknown> | null {
   const trimmed = headerOverride?.trim()

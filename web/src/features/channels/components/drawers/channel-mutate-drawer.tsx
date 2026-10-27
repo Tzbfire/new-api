@@ -232,6 +232,7 @@ import {
   type ModelMappingDraftRequest,
 } from '../model-mapping-editor'
 import { ModelRedirectPanel } from '../model-redirect-panel'
+import { RequestCompressionSetting } from '../request-compression-setting'
 import { ResponsesWebSocketSetting } from '../responses-websocket-setting'
 import { UpstreamModelSelection } from '../upstream-model-selection'
 import {
@@ -2790,6 +2791,7 @@ export function ChannelMutateDrawer({
           )}
         />
 
+        <RequestCompressionSetting disabled={sensitiveLocked || isSubmitting} />
         <FormField
           control={form.control}
           name='header_override'
