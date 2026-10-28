@@ -96,6 +96,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const [useVisualEditor, setUseVisualEditor] = useState(true)
+  const [useModelVisualEditor, setUseModelVisualEditor] = useState(true)
 
   const rateLimitSchema = createRateLimitSchema(t)
 
@@ -329,52 +330,87 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
             name='ModelRequestRateLimitModel'
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{t('Model-specific rate limits')}</FormLabel>
+                <div className='flex items-center justify-between'>
+                  <FormLabel>{t('Model-specific rate limits')}</FormLabel>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    onClick={() =>
+                      setUseModelVisualEditor(!useModelVisualEditor)
+                    }
+                  >
+                    {useModelVisualEditor ? (
+                      <>
+                        <Code2 className='mr-2 h-4 w-4' />
+                        {t('JSON Mode')}
+                      </>
+                    ) : (
+                      <>
+                        <Palette className='mr-2 h-4 w-4' />
+                        {t('Visual Mode')}
+                      </>
+                    )}
+                  </Button>
+                </div>
                 <FormControl>
-                  <JsonCodeEditor
-                    value={field.value || ''}
-                    onChange={field.onChange}
-                    name={field.name}
-                    onBlur={field.onBlur}
-                    textareaRef={field.ref}
-                    ariaLabel={t('Model-specific rate limits')}
-                    placeholder={`{
+                  {useModelVisualEditor ? (
+                    <RateLimitVisualEditor
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      entity='model'
+                    />
+                  ) : (
+                    <JsonCodeEditor
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
+                      ariaLabel={t('Model-specific rate limits')}
+                      placeholder={`{
   "gpt-6-luna": [60, 60]
 }`}
-                    aria-invalid={Boolean(
-                      form.formState.errors.ModelRequestRateLimitModel
-                    )}
-                  />
-                </FormControl>
-                <FormDescription>
-                  <div className='space-y-1 text-xs'>
-                    <p>{t('Configure per-user limits for selected models.')}</p>
-                    <p>
-                      {t(
-                        'Model rules override group and global limits and use the same period.'
+                      aria-invalid={Boolean(
+                        form.formState.errors.ModelRequestRateLimitModel
                       )}
-                    </p>
-                    <p className='font-semibold'>{t('Format:')}</p>
-                    <ul className='list-inside list-disc space-y-0.5 pl-2'>
-                      <li>
-                        {t('JSON object:')}{' '}
-                        {`{"model-name": [maxRequests, maxSuccess]}`}
-                      </li>
-                      <li>
-                        {t('Example:')}{' '}
-                        {`{"gpt-6-luna": [60, 60]}`}
-                      </li>
-                      <li>
-                        {t('Rules are counted separately for each user and model.')}
-                      </li>
-                      <li>
+                    />
+                  )}
+                </FormControl>
+                {!useModelVisualEditor && (
+                  <FormDescription>
+                    <div className='space-y-1 text-xs'>
+                      <p>
+                        {t('Configure per-user limits for selected models.')}
+                      </p>
+                      <p>
                         {t(
-                          'maxRequests ≥ 0, maxSuccess ≥ 1, both ≤ 2,147,483,647'
+                          'Model rules override group and global limits and use the same period.'
                         )}
-                      </li>
-                    </ul>
-                  </div>
-                </FormDescription>
+                      </p>
+                      <p className='font-semibold'>{t('Format:')}</p>
+                      <ul className='list-inside list-disc space-y-0.5 pl-2'>
+                        <li>
+                          {t('JSON object:')}{' '}
+                          {`{"model-name": [maxRequests, maxSuccess]}`}
+                        </li>
+                        <li>
+                          {t('Example:')} {`{"gpt-6-luna": [60, 60]}`}
+                        </li>
+                        <li>
+                          {t(
+                            'Rules are counted separately for each user and model.'
+                          )}
+                        </li>
+                        <li>
+                          {t(
+                            'maxRequests ≥ 0, maxSuccess ≥ 1, both ≤ 2,147,483,647'
+                          )}
+                        </li>
+                      </ul>
+                    </div>
+                  </FormDescription>
+                )}
                 <FormMessage />
               </FormItem>
             )}

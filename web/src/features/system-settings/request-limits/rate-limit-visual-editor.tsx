@@ -27,11 +27,16 @@ import { Input } from '@/components/ui/input'
 
 import { safeJsonParseWithValidation } from '../utils/json-parser'
 import { isObjectRecord } from '../utils/json-validators'
-import { RateLimitDialog, type RateLimitEntryData } from './rate-limit-dialog'
+import {
+  RateLimitDialog,
+  type RateLimitEntity,
+  type RateLimitEntryData,
+} from './rate-limit-dialog'
 
 type RateLimitVisualEditorProps = {
   value: string
   onChange: (value: string) => void
+  entity?: RateLimitEntity
 }
 
 type RateLimitEntry = RateLimitEntryData
@@ -39,8 +44,10 @@ type RateLimitEntry = RateLimitEntryData
 export function RateLimitVisualEditor({
   value,
   onChange,
+  entity = 'group',
 }: RateLimitVisualEditorProps) {
   const { t } = useTranslation()
+  const isModel = entity === 'model'
   const [searchText, setSearchText] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editData, setEditData] = useState<RateLimitEntry | null>(null)
@@ -56,7 +63,7 @@ export function RateLimitVisualEditor({
     })
 
     return Object.entries(parsed)
-      .map(([groupName, limits]) => {
+      .map(([name, limits]) => {
         if (
           Array.isArray(limits) &&
           limits.length === 2 &&
@@ -64,7 +71,7 @@ export function RateLimitVisualEditor({
           typeof limits[1] === 'number'
         ) {
           return {
-            groupName,
+            name,
             maxRequests: limits[0],
             maxSuccess: limits[1],
           }
@@ -78,7 +85,7 @@ export function RateLimitVisualEditor({
     if (!searchText) return rateLimits
     const lowerSearch = searchText.toLowerCase()
     return rateLimits.filter((limit) =>
-      limit.groupName.toLowerCase().includes(lowerSearch)
+      limit.name.toLowerCase().includes(lowerSearch)
     )
   }, [rateLimits, searchText])
 
@@ -89,23 +96,23 @@ export function RateLimitVisualEditor({
       silent: true,
     })
 
-    if (editData && editData.groupName !== data.groupName) {
-      delete parsed[editData.groupName]
+    if (editData && editData.name !== data.name) {
+      delete parsed[editData.name]
     }
 
-    parsed[data.groupName] = [data.maxRequests, data.maxSuccess]
+    parsed[data.name] = [data.maxRequests, data.maxSuccess]
 
     onChange(JSON.stringify(parsed, null, 2))
   }
 
-  const handleDelete = (groupName: string) => {
+  const handleDelete = (name: string) => {
     const parsed = safeJsonParseWithValidation<Record<string, unknown>>(value, {
       fallback: {},
       validator: isObjectRecord,
       silent: true,
     })
 
-    delete parsed[groupName]
+    delete parsed[name]
 
     onChange(JSON.stringify(parsed, null, 2))
   }
@@ -120,13 +127,32 @@ export function RateLimitVisualEditor({
     setDialogOpen(true)
   }
 
+  const searchPlaceholder = t(
+    isModel ? 'Search models...' : 'Search group names...'
+  )
+  const addLabel = t(isModel ? 'Add model' : 'Add group')
+  let emptyContent: string
+  if (searchText) {
+    emptyContent = t(
+      isModel ? 'No models match your search' : 'No groups match your search'
+    )
+  } else if (isModel) {
+    emptyContent = t(
+      'No model-specific rate limits configured. Click "Add model" to get started.'
+    )
+  } else {
+    emptyContent = t(
+      'No group-based rate limits configured. Click "Add group" to get started.'
+    )
+  }
+
   return (
     <div className='space-y-4'>
       <div className='flex items-center gap-4'>
         <div className='relative flex-1'>
           <Search className='text-muted-foreground absolute top-2.5 left-2.5 h-4 w-4' />
           <Input
-            placeholder={t('Search group names...')}
+            placeholder={searchPlaceholder}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             className='pl-9'
@@ -134,26 +160,20 @@ export function RateLimitVisualEditor({
         </div>
         <Button onClick={handleAdd}>
           <Plus className='mr-2 h-4 w-4' />
-          {t('Add group')}
+          {addLabel}
         </Button>
       </div>
 
       <StaticDataTable
         data={filteredRateLimits}
-        getRowKey={(limit) => limit.groupName}
-        emptyContent={
-          searchText
-            ? t('No groups match your search')
-            : t(
-                'No group-based rate limits configured. Click "Add group" to get started.'
-              )
-        }
+        getRowKey={(limit) => limit.name}
+        emptyContent={emptyContent}
         columns={[
           {
             id: 'group',
-            header: t('Group Name'),
+            header: t(isModel ? 'Model Name' : 'Group Name'),
             cellClassName: 'font-medium',
-            cell: (limit) => limit.groupName,
+            cell: (limit) => limit.name,
           },
           {
             id: 'max-requests',
@@ -190,7 +210,7 @@ export function RateLimitVisualEditor({
                 deleteLabel={t('Delete')}
                 menuLabel={t('Open menu')}
                 onEdit={() => handleEdit(limit)}
-                onDelete={() => handleDelete(limit.groupName)}
+                onDelete={() => handleDelete(limit.name)}
               />
             ),
           },
@@ -202,6 +222,7 @@ export function RateLimitVisualEditor({
         onOpenChange={setDialogOpen}
         onSave={handleSave}
         editData={editData}
+        entity={entity}
       />
     </div>
   )

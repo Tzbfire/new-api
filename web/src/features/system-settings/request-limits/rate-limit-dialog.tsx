@@ -36,7 +36,7 @@ import {
 import { Input } from '@/components/ui/input'
 
 const rateLimitDialogSchema = z.object({
-  groupName: z.string().min(1, 'Group name is required'),
+  name: z.string().min(1, 'Name is required'),
   maxRequests: z
     .number()
     .min(0, 'Must be ≥ 0')
@@ -52,16 +52,19 @@ type RateLimitDialogFormValues = z.infer<typeof rateLimitDialogSchema>
 const RATE_LIMIT_FORM_ID = 'rate-limit-form'
 
 export type RateLimitEntryData = {
-  groupName: string
+  name: string
   maxRequests: number
   maxSuccess: number
 }
+
+export type RateLimitEntity = 'group' | 'model'
 
 type RateLimitDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSave: (data: RateLimitEntryData) => void
   editData?: RateLimitEntryData | null
+  entity?: RateLimitEntity
 }
 
 export function RateLimitDialog({
@@ -69,14 +72,43 @@ export function RateLimitDialog({
   onOpenChange,
   onSave,
   editData,
+  entity = 'group',
 }: RateLimitDialogProps) {
   const { t } = useTranslation()
   const isEditMode = !!editData
+  const isModel = entity === 'model'
+  let dialogTitle: string
+  if (isModel) {
+    dialogTitle = isEditMode
+      ? t('Edit model rate limit')
+      : t('Add model rate limit')
+  } else {
+    dialogTitle = isEditMode
+      ? t('Edit group rate limit')
+      : t('Add group rate limit')
+  }
+  const dialogDescription = isModel
+    ? t('Configure model request limits for each user.')
+    : t('Configure rate limiting rules for a specific user group.')
+  const nameLabel = t(isModel ? 'Model Name' : 'Group Name')
+  const namePlaceholder = t(
+    isModel ? 'e.g., gpt-4, claude-3' : 'e.g., default, vip, premium'
+  )
+  let nameDescription: string
+  if (isEditMode) {
+    nameDescription = isModel
+      ? t('Model name cannot be changed when editing.')
+      : t('Group name cannot be changed when editing.')
+  } else {
+    nameDescription = isModel
+      ? t('Unique model name for this rule.')
+      : t('Unique identifier for this group.')
+  }
 
   const form = useForm<RateLimitDialogFormValues>({
     resolver: zodResolver(rateLimitDialogSchema),
     defaultValues: {
-      groupName: '',
+      name: '',
       maxRequests: 0,
       maxSuccess: 1,
     },
@@ -87,7 +119,7 @@ export function RateLimitDialog({
       form.reset(editData)
     } else {
       form.reset({
-        groupName: '',
+        name: '',
         maxRequests: 0,
         maxSuccess: 1,
       })
@@ -104,12 +136,8 @@ export function RateLimitDialog({
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={
-        isEditMode ? t('Edit group rate limit') : t('Add group rate limit')
-      }
-      description={t(
-        'Configure rate limiting rules for a specific user group.'
-      )}
+      title={dialogTitle}
+      description={dialogDescription}
       contentClassName='sm:max-w-[500px]'
       contentHeight='auto'
       bodyClassName='space-y-4'
@@ -136,22 +164,18 @@ export function RateLimitDialog({
         >
           <FormField
             control={form.control}
-            name='groupName'
+            name='name'
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{t('Group Name')}</FormLabel>
+                <FormLabel>{nameLabel}</FormLabel>
                 <FormControl>
                   <Input
-                    placeholder={t('e.g., default, vip, premium')}
+                    placeholder={namePlaceholder}
                     {...field}
                     disabled={isEditMode}
                   />
                 </FormControl>
-                <FormDescription>
-                  {isEditMode
-                    ? t('Group name cannot be changed when editing.')
-                    : t('Unique identifier for this group.')}
-                </FormDescription>
+                <FormDescription>{nameDescription}</FormDescription>
                 <FormMessage />
               </FormItem>
             )}
@@ -172,7 +196,7 @@ export function RateLimitDialog({
                       step={1}
                       {...field}
                       onChange={(e) =>
-                        field.onChange(parseInt(e.target.value) || 0)
+                        field.onChange(Number.parseInt(e.target.value) || 0)
                       }
                     />
                     <span className='text-muted-foreground text-sm'>
@@ -203,7 +227,7 @@ export function RateLimitDialog({
                       step={1}
                       {...field}
                       onChange={(e) =>
-                        field.onChange(parseInt(e.target.value) || 1)
+                        field.onChange(Number.parseInt(e.target.value) || 1)
                       }
                     />
                     <span className='text-muted-foreground text-sm'>

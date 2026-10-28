@@ -15,7 +15,14 @@ You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
@@ -54,25 +61,32 @@ describe('rate limit settings', () => {
   })
 
   afterEach(() => {
+    cleanup()
     vi.restoreAllMocks()
-    document.body.replaceChildren()
   })
 
-  it('saves model-specific limits as their own option', async () => {
+  it('adds model-specific limits through the visual editor', async () => {
     renderRateLimits()
-    const editor = screen.getByRole('textbox', {
-      name: 'Model-specific rate limits',
-    })
+    const user = userEvent.setup()
 
-    fireEvent.input(editor, {
-      target: { value: '{"gpt-6-luna":[5,5]}' },
-    })
+    await user.click(screen.getByRole('button', { name: 'Add model' }))
+    await user.type(
+      screen.getByRole('textbox', { name: 'Model Name' }),
+      'gpt-6-luna'
+    )
+    const spinbuttons = screen.getAllByRole('spinbutton')
+    fireEvent.change(spinbuttons[0], { target: { value: '5' } })
+    fireEvent.change(spinbuttons[1], { target: { value: '5' } })
+    const addButtons = screen.getAllByRole('button', { name: 'Add' })
+    const dialogAddButton = addButtons.at(-1)
+    if (!dialogAddButton) throw new Error('Add button not found')
+    await user.click(dialogAddButton)
     fireEvent.click(screen.getByRole('button', { name: 'Save rate limits' }))
 
     await waitFor(() =>
       expect(api.put).toHaveBeenCalledWith('/api/option/', {
         key: 'ModelRequestRateLimitModel',
-        value: '{"gpt-6-luna":[5,5]}',
+        value: '{\n  "gpt-6-luna": [\n    5,\n    5\n  ]\n}',
       })
     )
   })
