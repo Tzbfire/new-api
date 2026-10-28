@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -14,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
@@ -169,6 +171,46 @@ func modelRequestSucceeded(c *gin.Context) bool {
 	return c.Writer.Status() < 400 && !status.ResponseFailed()
 }
 
+func modelRateLimitRequestModel(c *gin.Context) string {
+	path := c.Request.URL.Path
+	if strings.HasPrefix(path, "/v1/realtime") {
+		return strings.TrimSpace(c.Query("model"))
+	}
+	if strings.HasPrefix(path, "/v1beta/models/") || strings.HasPrefix(path, "/v1/models/") {
+		return strings.TrimSpace(extractModelNameFromGeminiPath(path))
+	}
+	if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodDelete {
+		return ""
+	}
+
+	request, err := getModelFromRequest(c)
+	if err != nil || request == nil {
+		return ""
+	}
+	return strings.TrimSpace(request.Model)
+}
+
+func modelRateLimitForModel(model string) (string, int, int, bool) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "", 0, 0, false
+	}
+
+	candidates := []string{model}
+	if formatted := ratio_setting.FormatMatchingModelName(model); formatted != model {
+		candidates = append(candidates, formatted)
+	}
+	if routed := ratio_setting.RoutingMatchModelName(model); routed != model {
+		candidates = append(candidates, routed)
+	}
+	for _, candidate := range candidates {
+		if totalCount, successCount, found := setting.GetModelRateLimit(candidate); found {
+			return candidate, totalCount, successCount, true
+		}
+	}
+	return "", 0, 0, false
+}
+
 // ModelRequestRateLimit 模型请求限流中间件
 func ModelRequestRateLimit() func(c *gin.Context) {
 	return func(c *gin.Context) {
@@ -189,14 +231,23 @@ func ModelRequestRateLimit() func(c *gin.Context) {
 			group = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 		}
 
-		// 获取分组的限流配置。配置了独立限流的分组按用户和分组单独计数，
-		// 其余分组共用该用户的全局计数
+		// Model-specific rules take precedence over group and global rules. The
+		// model key is paired with the user id so one heavy user cannot consume
+		// another user's model budget.
 		subject := strconv.Itoa(c.GetInt("id"))
-		groupTotalCount, groupSuccessCount, found := setting.GetGroupRateLimit(group)
-		if found {
-			totalMaxCount = groupTotalCount
-			successMaxCount = groupSuccessCount
-			subject += ":" + group
+		if modelKey, modelTotalCount, modelSuccessCount, found := modelRateLimitForModel(modelRateLimitRequestModel(c)); found {
+			totalMaxCount = modelTotalCount
+			successMaxCount = modelSuccessCount
+			subject += ":model:" + modelKey
+		} else {
+			// Groups with an explicit limit are counted separately per user and
+			// group; all other groups share the user's global counter.
+			groupTotalCount, groupSuccessCount, found := setting.GetGroupRateLimit(group)
+			if found {
+				totalMaxCount = groupTotalCount
+				successMaxCount = groupSuccessCount
+				subject += ":" + group
+			}
 		}
 
 		// 根据存储类型选择并执行限流处理器

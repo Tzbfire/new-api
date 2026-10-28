@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -196,4 +198,57 @@ func TestModelRateLimitCountsConfiguredGroupsSeparately(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestModelRateLimitCountsConfiguredModelsPerUser(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	previousEnabled := setting.ModelRequestRateLimitEnabled
+	previousDuration := setting.ModelRequestRateLimitDurationMinutes
+	previousTotal := setting.ModelRequestRateLimitCount
+	previousSuccess := setting.ModelRequestRateLimitSuccessCount
+	previousRedisEnabled := common.RedisEnabled
+	setting.ModelRequestRateLimitMutex.Lock()
+	previousModels := setting.ModelRequestRateLimitModel
+	setting.ModelRequestRateLimitModel = map[string][2]int{"gpt-6-luna": {0, 1}}
+	setting.ModelRequestRateLimitMutex.Unlock()
+	t.Cleanup(func() {
+		setting.ModelRequestRateLimitEnabled = previousEnabled
+		setting.ModelRequestRateLimitDurationMinutes = previousDuration
+		setting.ModelRequestRateLimitCount = previousTotal
+		setting.ModelRequestRateLimitSuccessCount = previousSuccess
+		common.RedisEnabled = previousRedisEnabled
+		setting.ModelRequestRateLimitMutex.Lock()
+		setting.ModelRequestRateLimitModel = previousModels
+		setting.ModelRequestRateLimitMutex.Unlock()
+	})
+	setting.ModelRequestRateLimitEnabled = true
+	setting.ModelRequestRateLimitDurationMinutes = 1
+	setting.ModelRequestRateLimitCount = 0
+	setting.ModelRequestRateLimitSuccessCount = 1000
+	common.RedisEnabled = false
+
+	userID := 7300000 + int(modelRateLimitTestUsers.Add(1))
+	router := gin.New()
+	router.Use(BodyStorageCleanup())
+	router.POST("/v1/chat/completions", func(c *gin.Context) {
+		id, _ := strconv.Atoi(c.GetHeader("X-Test-User"))
+		c.Set("id", id)
+	}, ModelRequestRateLimit(), func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	request := func(model string, id int) *httptest.ResponseRecorder {
+		body := []byte(fmt.Sprintf(`{"model":%q}`, model))
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Test-User", strconv.Itoa(id))
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		return recorder
+	}
+
+	assert.Equal(t, http.StatusOK, request("gpt-6-luna", userID).Code)
+	assert.Equal(t, http.StatusTooManyRequests, request("gpt-6-luna", userID).Code)
+	assert.Equal(t, http.StatusOK, request("gpt-6.1-sol", userID).Code)
+	assert.Equal(t, http.StatusOK, request("gpt-6-luna", userID+1).Code)
 }

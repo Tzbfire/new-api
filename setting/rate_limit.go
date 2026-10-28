@@ -3,6 +3,7 @@ package setting
 import (
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
@@ -23,6 +24,7 @@ var ModelRequestRateLimitDurationMinutes = 1
 var ModelRequestRateLimitCount = 0
 var ModelRequestRateLimitSuccessCount = 1000
 var ModelRequestRateLimitGroup = map[string][2]int{}
+var ModelRequestRateLimitModel = map[string][2]int{}
 var ModelRequestRateLimitMutex sync.RWMutex
 
 func ModelRequestRateLimitGroup2JSONString() string {
@@ -37,11 +39,15 @@ func ModelRequestRateLimitGroup2JSONString() string {
 }
 
 func UpdateModelRequestRateLimitGroupByJSONString(jsonStr string) error {
-	ModelRequestRateLimitMutex.RLock()
-	defer ModelRequestRateLimitMutex.RUnlock()
+	ModelRequestRateLimitMutex.Lock()
+	defer ModelRequestRateLimitMutex.Unlock()
 
-	ModelRequestRateLimitGroup = make(map[string][2]int)
-	return common.Unmarshal([]byte(jsonStr), &ModelRequestRateLimitGroup)
+	groupLimits := make(map[string][2]int)
+	if err := common.Unmarshal([]byte(jsonStr), &groupLimits); err != nil {
+		return err
+	}
+	ModelRequestRateLimitGroup = groupLimits
+	return nil
 }
 
 func GetGroupRateLimit(group string) (totalCount, successCount int, found bool) {
@@ -53,6 +59,45 @@ func GetGroupRateLimit(group string) (totalCount, successCount int, found bool) 
 	}
 
 	limits, found := ModelRequestRateLimitGroup[group]
+	if !found {
+		return 0, 0, false
+	}
+	return limits[0], limits[1], true
+}
+
+func ModelRequestRateLimitModel2JSONString() string {
+	ModelRequestRateLimitMutex.RLock()
+	defer ModelRequestRateLimitMutex.RUnlock()
+
+	jsonBytes, err := common.Marshal(ModelRequestRateLimitModel)
+	if err != nil {
+		common.SysLog(common.LogText("error marshalling model rate limits: %s", err.Error()))
+	}
+	return string(jsonBytes)
+}
+
+func UpdateModelRequestRateLimitModelByJSONString(jsonStr string) error {
+	modelLimits := make(map[string][2]int)
+	if err := common.Unmarshal([]byte(jsonStr), &modelLimits); err != nil {
+		return err
+	}
+
+	ModelRequestRateLimitMutex.Lock()
+	defer ModelRequestRateLimitMutex.Unlock()
+	ModelRequestRateLimitModel = modelLimits
+	return nil
+}
+
+func GetModelRateLimit(model string) (totalCount, successCount int, found bool) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return 0, 0, false
+	}
+
+	ModelRequestRateLimitMutex.RLock()
+	defer ModelRequestRateLimitMutex.RUnlock()
+
+	limits, found := ModelRequestRateLimitModel[model]
 	if !found {
 		return 0, 0, false
 	}
@@ -71,6 +116,27 @@ func CheckModelRequestRateLimitGroup(jsonStr string) error {
 		}
 		if int64(limits[0]) > maxModelRequestRateLimitCount || int64(limits[1]) > maxModelRequestRateLimitCount {
 			return fmt.Errorf("group %s [%d, %d] exceeds max rate limit %d", group, limits[0], limits[1], maxModelRequestRateLimitCount)
+		}
+	}
+
+	return nil
+}
+
+func CheckModelRequestRateLimitModel(jsonStr string) error {
+	checkModelRequestRateLimitModel := make(map[string][2]int)
+	if err := common.Unmarshal([]byte(jsonStr), &checkModelRequestRateLimitModel); err != nil {
+		return err
+	}
+
+	for model, limits := range checkModelRequestRateLimitModel {
+		if strings.TrimSpace(model) == "" {
+			return fmt.Errorf("model name cannot be empty")
+		}
+		if limits[0] < 0 || limits[1] < 1 {
+			return fmt.Errorf("model %s has negative rate limit values: [%d, %d]", model, limits[0], limits[1])
+		}
+		if int64(limits[0]) > maxModelRequestRateLimitCount || int64(limits[1]) > maxModelRequestRateLimitCount {
+			return fmt.Errorf("model %s [%d, %d] exceeds max rate limit %d", model, limits[0], limits[1], maxModelRequestRateLimitCount)
 		}
 	}
 

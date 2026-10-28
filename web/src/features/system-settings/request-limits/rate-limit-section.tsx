@@ -78,6 +78,12 @@ const createRateLimitSchema = (t: (key: string) => string) =>
       .refine(isValidJSON, {
         message: t('Invalid JSON format or values out of allowed range'),
       }),
+    ModelRequestRateLimitModel: z
+      .string()
+      .optional()
+      .refine(isValidJSON, {
+        message: t('Invalid JSON format or values out of allowed range'),
+      }),
   })
 
 type RateLimitFormValues = z.infer<ReturnType<typeof createRateLimitSchema>>
@@ -161,7 +167,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 0)
+                          field.onChange(Number.parseInt(e.target.value) || 0)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -192,7 +198,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 0)
+                          field.onChange(Number.parseInt(e.target.value) || 0)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -223,7 +229,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 1)
+                          field.onChange(Number.parseInt(e.target.value) || 1)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -313,6 +319,62 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                     </div>
                   </FormDescription>
                 )}
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='ModelRequestRateLimitModel'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Model-specific rate limits')}</FormLabel>
+                <FormControl>
+                  <JsonCodeEditor
+                    value={field.value || ''}
+                    onChange={field.onChange}
+                    name={field.name}
+                    onBlur={field.onBlur}
+                    textareaRef={field.ref}
+                    ariaLabel={t('Model-specific rate limits')}
+                    placeholder={`{
+  "gpt-6-luna": [60, 60]
+}`}
+                    aria-invalid={Boolean(
+                      form.formState.errors.ModelRequestRateLimitModel
+                    )}
+                  />
+                </FormControl>
+                <FormDescription>
+                  <div className='space-y-1 text-xs'>
+                    <p>{t('Configure per-user limits for selected models.')}</p>
+                    <p>
+                      {t(
+                        'Model rules override group and global limits and use the same period.'
+                      )}
+                    </p>
+                    <p className='font-semibold'>{t('Format:')}</p>
+                    <ul className='list-inside list-disc space-y-0.5 pl-2'>
+                      <li>
+                        {t('JSON object:')}{' '}
+                        {`{"model-name": [maxRequests, maxSuccess]}`}
+                      </li>
+                      <li>
+                        {t('Example:')}{' '}
+                        {`{"gpt-6-luna": [60, 60]}`}
+                      </li>
+                      <li>
+                        {t('Rules are counted separately for each user and model.')}
+                      </li>
+                      <li>
+                        {t(
+                          'maxRequests ≥ 0, maxSuccess ≥ 1, both ≤ 2,147,483,647'
+                        )}
+                      </li>
+                    </ul>
+                  </div>
+                </FormDescription>
                 <FormMessage />
               </FormItem>
             )}
