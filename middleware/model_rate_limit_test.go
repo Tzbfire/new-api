@@ -45,6 +45,60 @@ func TestModelRedisRateLimitUsesUTCRegardlessOfLocalTimezone(t *testing.T) {
 	assert.False(t, allowed, "an existing UTC timestamp inside the window must remain limited on a non-UTC host")
 }
 
+func TestModelRedisTotalRateLimitRecoversAfterScriptFlush(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	redisServer, redisClient := useRateLimitMiniRedis(t)
+	redisServer.SetTime(time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC))
+	router := gin.New()
+	router.GET("/", redisRateLimitHandler("script-flush", 60, 2, 0), func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	require.Equal(t, http.StatusOK, performRateLimitRequest(router, "/", "127.0.0.1:1000").Code)
+	require.NoError(t, redisClient.ScriptFlush(context.Background()).Err())
+
+	response := performRateLimitRequest(router, "/", "127.0.0.1:1000")
+	assert.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	response = performRateLimitRequest(router, "/", "127.0.0.1:1000")
+	assert.Equal(t, http.StatusTooManyRequests, response.Code, response.Body.String())
+}
+
+func TestModelRedisTotalRateLimitRecoversAfterInitialRedisFailure(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	redisServer, _ := useRateLimitMiniRedis(t)
+	redisServer.SetTime(time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC))
+	router := gin.New()
+	router.GET("/", redisRateLimitHandler("initial-failure", 60, 1, 0), func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	redisServer.SetError("ERR test Redis unavailable")
+	assert.Equal(t, http.StatusInternalServerError, performRateLimitRequest(router, "/", "127.0.0.1:1000").Code)
+	redisServer.SetError("")
+
+	response := performRateLimitRequest(router, "/", "127.0.0.1:1000")
+	assert.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	response = performRateLimitRequest(router, "/", "127.0.0.1:1000")
+	assert.Equal(t, http.StatusTooManyRequests, response.Code, response.Body.String())
+}
+
+func TestModelRedisTotalRateLimitUsesCurrentRedisClient(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	router := gin.New()
+	router.GET("/", redisRateLimitHandler("current-client", 60, 1, 0), func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	for range 2 {
+		redisServer, _ := useRateLimitMiniRedis(t)
+		redisServer.SetTime(time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC))
+		response := performRateLimitRequest(router, "/", "127.0.0.1:1000")
+		assert.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		response = performRateLimitRequest(router, "/", "127.0.0.1:1000")
+		assert.Equal(t, http.StatusTooManyRequests, response.Code, response.Body.String())
+	}
+}
+
 var modelRateLimitTestUsers atomic.Int64
 
 func TestModelRateLimitStreamFailuresDoNotConsumeSuccessLimit(t *testing.T) {
@@ -168,8 +222,6 @@ func TestModelRateLimitCountsConfiguredGroupsSeparately(t *testing.T) {
 		{"b", http.StatusOK}, {"b", http.StatusTooManyRequests},
 		{"c", http.StatusOK}, {"d", http.StatusTooManyRequests},
 	}
-	// The Redis token bucket binds to the first Redis client it sees and another
-	// test already drives it, so the total limit runs on the memory backend only.
 	for _, tc := range []struct {
 		backend, limit string
 		counts         [2]int // [total, success] for groups a and b and for the global limit
@@ -177,6 +229,7 @@ func TestModelRateLimitCountsConfiguredGroupsSeparately(t *testing.T) {
 		{"memory", "success", [2]int{0, 1}},
 		{"redis", "success", [2]int{0, 1}},
 		{"memory", "total", [2]int{1, 1000}},
+		{"redis", "total", [2]int{1, 1000}},
 	} {
 		t.Run(tc.backend+"/"+tc.limit, func(t *testing.T) {
 			if tc.backend == "redis" {
@@ -209,7 +262,6 @@ func TestModelRateLimitCountsConfiguredModelsPerUser(t *testing.T) {
 	previousRedisEnabled := common.RedisEnabled
 	setting.ModelRequestRateLimitMutex.Lock()
 	previousModels := setting.ModelRequestRateLimitModel
-	setting.ModelRequestRateLimitModel = map[string][2]int{"gpt-6-luna": {0, 1}}
 	setting.ModelRequestRateLimitMutex.Unlock()
 	t.Cleanup(func() {
 		setting.ModelRequestRateLimitEnabled = previousEnabled
@@ -225,30 +277,55 @@ func TestModelRateLimitCountsConfiguredModelsPerUser(t *testing.T) {
 	setting.ModelRequestRateLimitDurationMinutes = 1
 	setting.ModelRequestRateLimitCount = 0
 	setting.ModelRequestRateLimitSuccessCount = 1000
-	common.RedisEnabled = false
+	for _, tc := range []struct {
+		name   string
+		redis  bool
+		counts [2]int
+	}{
+		{name: "memory/success", counts: [2]int{0, 1}},
+		{name: "memory/total", counts: [2]int{1, 1000}},
+		{name: "redis/success", redis: true, counts: [2]int{0, 1}},
+		{name: "redis/total", redis: true, counts: [2]int{1, 1000}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			common.RedisEnabled = false
+			if tc.redis {
+				redisServer, _ := useRateLimitMiniRedis(t)
+				redisServer.SetTime(time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC))
+			}
+			setting.ModelRequestRateLimitMutex.Lock()
+			setting.ModelRequestRateLimitModel = map[string][2]int{"gpt-6-luna": tc.counts}
+			setting.ModelRequestRateLimitMutex.Unlock()
+			userID := 7300000 + int(modelRateLimitTestUsers.Add(1))
+			router := gin.New()
+			router.Use(BodyStorageCleanup(), func(c *gin.Context) {
+				id, _ := strconv.Atoi(c.GetHeader("X-Test-User"))
+				c.Set("id", id)
+				common.SetContextKey(c, constant.ContextKeyTokenGroup, c.GetHeader("X-Test-Group"))
+			}, ModelRequestRateLimit())
+			for _, path := range []string{"/v1/chat/completions", "/v1/responses"} {
+				router.POST(path, func(c *gin.Context) { c.Status(http.StatusOK) })
+			}
 
-	userID := 7300000 + int(modelRateLimitTestUsers.Add(1))
-	router := gin.New()
-	router.Use(BodyStorageCleanup())
-	router.POST("/v1/chat/completions", func(c *gin.Context) {
-		id, _ := strconv.Atoi(c.GetHeader("X-Test-User"))
-		c.Set("id", id)
-	}, ModelRequestRateLimit(), func(c *gin.Context) {
-		c.Status(http.StatusOK)
-	})
-
-	request := func(model string, id int) *httptest.ResponseRecorder {
-		body := []byte(fmt.Sprintf(`{"model":%q}`, model))
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Test-User", strconv.Itoa(id))
-		recorder := httptest.NewRecorder()
-		router.ServeHTTP(recorder, req)
-		return recorder
+			for _, step := range []struct {
+				path, model, group string
+				userID, want       int
+			}{
+				{"/v1/chat/completions", "gpt-6-luna", "default", userID, http.StatusOK},
+				{"/v1/responses", "gpt-6-luna@effort:high", "default", userID, http.StatusTooManyRequests},
+				{"/v1/responses", "gpt-6.1-sol", "default", userID, http.StatusOK},
+				{"/v1/responses", "gpt-6-luna", "default", userID + 1, http.StatusOK},
+				{"/v1/responses", "gpt-6-luna", "Luna-Pro", userID, http.StatusTooManyRequests},
+			} {
+				body := []byte(fmt.Sprintf(`{"model":%q}`, step.model))
+				req := httptest.NewRequest(http.MethodPost, step.path, bytes.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("X-Test-User", strconv.Itoa(step.userID))
+				req.Header.Set("X-Test-Group", step.group)
+				recorder := httptest.NewRecorder()
+				router.ServeHTTP(recorder, req)
+				assert.Equal(t, step.want, recorder.Code, "%s %s %s user %d: %s", step.path, step.model, step.group, step.userID, recorder.Body.String())
+			}
+		})
 	}
-
-	assert.Equal(t, http.StatusOK, request("gpt-6-luna", userID).Code)
-	assert.Equal(t, http.StatusTooManyRequests, request("gpt-6-luna", userID).Code)
-	assert.Equal(t, http.StatusOK, request("gpt-6.1-sol", userID).Code)
-	assert.Equal(t, http.StatusOK, request("gpt-6-luna", userID+1).Code)
 }
