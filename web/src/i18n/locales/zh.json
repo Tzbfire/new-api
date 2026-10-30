@@ -7567,6 +7567,13 @@
     "Zhipu": "智谱",
     "Zhipu GLM": "智谱GLM",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Compress upstream JSON requests": "压缩上游 JSON 请求",
+    "Request compression algorithm": "请求压缩算法",
+    "Minimum JSON size (KiB)": "最小 JSON 大小（KiB）",
+    "Enable only if the upstream accepts the selected encoding. JSON requests at or above the minimum are compressed only when smaller.": "仅在上游支持所选编码时启用。达到最小大小的 JSON 请求仅在压缩后更小时才压缩。",
+    "Remove unsupported or conflicting Content-Encoding overrides before enabling compression.": "启用压缩前，请移除不支持或互相冲突的 Content-Encoding 覆盖配置。",
+    "Default: 64 KiB. Set 0 to try all JSON request sizes.": "默认：64 KiB。设为 0 时尝试压缩所有大小的 JSON 请求。",
+    "Invalid request compression minimum": "无效的请求压缩大小门槛"
   }
 }

@@ -34,7 +34,7 @@ import {
 import { channelSchema } from '../../types'
 import { RequestCompressionSetting } from '../request-compression-setting'
 
-const label = 'Compress upstream JSON requests (gzip)'
+const label = 'Compress upstream JSON requests'
 
 function SettingsForm(props: {
   headers?: string
@@ -181,10 +181,10 @@ describe('Request compression channel setting', () => {
     }
   )
 
-  test('an existing non-gzip encoding disables the shortcut and preserves all overrides', async () => {
+  test('an unsupported encoding disables the shortcut and preserves all overrides', async () => {
     const user = userEvent.setup()
     const saved: ChannelFormValues[] = []
-    const headers = '{"Content-Encoding":"zstd","X-Trace":"keep"}'
+    const headers = '{"Content-Encoding":"deflate","X-Trace":"keep"}'
     render(
       <SettingsForm headers={headers} onSave={(value) => saved.push(value)} />
     )
@@ -192,7 +192,7 @@ describe('Request compression channel setting', () => {
     expect(toggle).toHaveAttribute('aria-disabled', 'true')
     expect(
       screen.getByText(
-        'Remove the existing Content-Encoding override before enabling gzip.'
+        'Remove unsupported or conflicting Content-Encoding overrides before enabling compression.'
       )
     ).toBeInTheDocument()
     await user.click(toggle)
@@ -215,5 +215,94 @@ describe('Request compression channel setting', () => {
     toggle.focus()
     await user.keyboard(' ')
     expect(toggle).toBeChecked()
+  })
+
+  test.each([
+    ['gzip', 'gzip'],
+    ['zstd', 'zstd'],
+    ['br', 'Brotli (br)'],
+  ])(
+    'selecting %s saves the algorithm and custom threshold without losing headers',
+    async (encoding, option) => {
+      const user = userEvent.setup()
+      const saved: ChannelFormValues[] = []
+      const view = render(
+        <SettingsForm
+          headers='{"X-Trace":"keep"}'
+          onSave={(value) => saved.push(value)}
+        />
+      )
+      await user.click(screen.getByRole('switch', { name: label }))
+      const selector = screen.getByRole('combobox', {
+        name: 'Request compression algorithm',
+      })
+      if (encoding !== 'gzip') {
+        await user.click(selector)
+        await user.click(screen.getByRole('option', { name: option }))
+      }
+      const minimum = screen.getByRole('spinbutton', {
+        name: 'Minimum JSON size (KiB)',
+      })
+      expect(minimum).toHaveValue(64)
+      await user.clear(minimum)
+      await user.type(minimum, '32')
+      await user.click(screen.getByRole('button', { name: 'Save' }))
+      const payload = transformFormDataToCreatePayload(saved[0]).channel
+      expect(JSON.parse(payload.header_override ?? '')).toEqual({
+        'X-Trace': 'keep',
+        'Content-Encoding': encoding,
+        'X-New-Api-Compression-Min-Bytes': '32768',
+      })
+      view.unmount()
+      render(
+        <SettingsForm
+          headers={payload.header_override ?? ''}
+          onSave={() => undefined}
+        />
+      )
+      expect(screen.getByRole('switch', { name: label })).toBeChecked()
+      expect(
+        screen.getByRole('combobox', { name: 'Request compression algorithm' })
+      ).toHaveTextContent(option)
+      expect(
+        screen.getByRole('spinbutton', { name: 'Minimum JSON size (KiB)' })
+      ).toHaveValue(32)
+    }
+  )
+
+  test('zero threshold persists and locked compression controls cannot be changed', async () => {
+    const user = userEvent.setup()
+    const saved: ChannelFormValues[] = []
+    const view = render(
+      <SettingsForm
+        headers='{"Content-Encoding":"zstd"}'
+        onSave={(value) => saved.push(value)}
+      />
+    )
+    const minimum = screen.getByRole('spinbutton', {
+      name: 'Minimum JSON size (KiB)',
+    })
+    await user.clear(minimum)
+    await user.type(minimum, '0')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(
+      JSON.parse(saved[0].header_override ?? '')[
+        'X-New-Api-Compression-Min-Bytes'
+      ]
+    ).toBe('0')
+    view.unmount()
+    render(
+      <SettingsForm
+        headers={saved[0].header_override ?? ''}
+        disabled
+        onSave={() => undefined}
+      />
+    )
+    expect(
+      screen.getByRole('combobox', { name: 'Request compression algorithm' })
+    ).toBeDisabled()
+    expect(
+      screen.getByRole('spinbutton', { name: 'Minimum JSON size (KiB)' })
+    ).toBeDisabled()
   })
 })

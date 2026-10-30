@@ -7567,6 +7567,13 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Compress upstream JSON requests": "上流への JSON リクエストを圧縮",
+    "Request compression algorithm": "リクエストの圧縮方式",
+    "Minimum JSON size (KiB)": "JSON の最小サイズ（KiB）",
+    "Enable only if the upstream accepts the selected encoding. JSON requests at or above the minimum are compressed only when smaller.": "上流が選択したエンコードに対応する場合のみ有効にしてください。最小サイズ以上の JSON リクエストを、サイズが小さくなる場合にのみ圧縮します。",
+    "Remove unsupported or conflicting Content-Encoding overrides before enabling compression.": "圧縮を有効にする前に、未対応または競合する Content-Encoding の上書きを削除してください。",
+    "Default: 64 KiB. Set 0 to try all JSON request sizes.": "既定値：64 KiB。0 に設定すると、すべてのサイズの JSON リクエストで圧縮を試みます。",
+    "Invalid request compression minimum": "リクエスト圧縮の最小サイズが無効です"
   }
 }

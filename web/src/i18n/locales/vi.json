@@ -7567,6 +7567,13 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Compress upstream JSON requests": "Nén yêu cầu JSON gửi tới dịch vụ thượng nguồn",
+    "Request compression algorithm": "Thuật toán nén yêu cầu",
+    "Minimum JSON size (KiB)": "Kích thước JSON tối thiểu (KiB)",
+    "Enable only if the upstream accepts the selected encoding. JSON requests at or above the minimum are compressed only when smaller.": "Chỉ bật khi dịch vụ thượng nguồn hỗ trợ kiểu mã hóa đã chọn. Yêu cầu JSON đạt kích thước tối thiểu chỉ được nén khi làm giảm dung lượng.",
+    "Remove unsupported or conflicting Content-Encoding overrides before enabling compression.": "Xóa các ghi đè Content-Encoding không được hỗ trợ hoặc xung đột trước khi bật nén.",
+    "Default: 64 KiB. Set 0 to try all JSON request sizes.": "Mặc định: 64 KiB. Đặt 0 để thử nén yêu cầu JSON ở mọi kích thước.",
+    "Invalid request compression minimum": "Kích thước tối thiểu để nén yêu cầu không hợp lệ"
   }
 }

@@ -19,7 +19,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/andybalholm/brotli"
 	"github.com/gin-gonic/gin"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/http2"
@@ -143,54 +145,172 @@ func TestDoApiRequestGzip(t *testing.T) {
 	}
 }
 
-func TestGzipRequestHTTP2Retry(t *testing.T) {
-	payload := []byte(`{"input":"` + strings.Repeat("HTTP2 retry with a large context; ", 4096) + `"}`)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer ln.Close()
-	results := runResetOnFirstStreamServer(ln, true)
-	client, transport := newH2PriorKnowledgeClient(ln)
-	defer transport.CloseIdleConnections()
-	body, storage := newPassThroughBody(t, payload)
-	defer storage.Close()
-	req, err := http.NewRequest(http.MethodPost, "http://upstream.test/v1/responses", body)
-	require.NoError(t, err)
-	ApplyUpstreamBodyMetadata(req, body)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Encoding", "gzip")
-	req.Header.Set("Content-Length", fmt.Sprint(len(payload)))
-	req.TransferEncoding = []string{"chunked"}
-	require.NoError(t, compressUpstreamJSONRequest(req))
-	assert.Empty(t, req.Header.Get("Content-Length"))
-	assert.Empty(t, req.TransferEncoding)
-
-	resp, err := client.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, 2, resp.ProtoMajor)
-	result := awaitH2ServerResult(t, results)
-	require.NoError(t, result.err)
-	require.Len(t, result.attemptBodies, 2)
-	assert.Equal(t, result.attemptBodies[0], result.attemptBodies[1])
-	assert.EqualValues(t, len(result.attemptBodies[0]), req.ContentLength)
-	decoder, err := gzip.NewReader(bytes.NewReader(result.attemptBodies[1]))
-	require.NoError(t, err)
-	decoded, err := io.ReadAll(decoder)
-	require.NoError(t, err)
-	require.NoError(t, decoder.Close())
-	assert.Equal(t, payload, decoded)
-	for range 2 {
-		replay, err := req.GetBody()
+func decodeCompressedRequest(t *testing.T, body []byte, encoding string) []byte {
+	t.Helper()
+	var reader io.Reader
+	switch encoding {
+	case "gzip":
+		decoder, err := gzip.NewReader(bytes.NewReader(body))
 		require.NoError(t, err)
-		data, err := io.ReadAll(replay)
+		defer decoder.Close()
+		reader = decoder
+	case "zstd":
+		decoder, err := zstd.NewReader(bytes.NewReader(body))
 		require.NoError(t, err)
-		require.NoError(t, replay.Close())
-		assert.Equal(t, result.attemptBodies[0], data)
+		defer decoder.Close()
+		reader = decoder
+	case "br":
+		reader = brotli.NewReader(bytes.NewReader(body))
+	default:
+		t.Fatalf("unexpected request encoding %q", encoding)
 	}
-	stored, err := storage.Bytes()
-	require.NoError(t, err, "closing the old request body must not close shared storage")
-	assert.Equal(t, payload, stored)
+	decoded, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	return decoded
+}
+
+func TestDoApiRequestCompression(t *testing.T) {
+	service.InitHttpClient()
+	gin.SetMode(gin.TestMode)
+	payload := []byte(`{"input":"` + strings.Repeat("large JSON context and tool output; ", 4096) + `","stream":true}`)
+	smallPayload := []byte(`{"input":"` + strings.Repeat("small context; ", 512) + `"}`)
+	boundaryPayload := []byte(`{"input":"` + strings.Repeat("a", (64<<10)-len(`{"input":""}`)) + `"}`)
+	belowBoundaryPayload := []byte(`{"input":"` + strings.Repeat("a", (64<<10)-1-len(`{"input":""}`)) + `"}`)
+	for _, encoding := range []string{"gzip", "zstd", "br"} {
+		for _, scenario := range []struct {
+			name       string
+			minimum    string
+			body       []byte
+			compressed bool
+		}{
+			{name: "legacy default", compressed: true},
+			{name: "at configured threshold", minimum: fmt.Sprint(len(payload)), compressed: true},
+			{name: "below configured threshold", minimum: fmt.Sprint(len(payload) + 1)},
+			{name: "all sizes", minimum: "0", compressed: true},
+			{name: "small JSON default", body: smallPayload},
+			{name: "small JSON all sizes", body: smallPayload, minimum: "0", compressed: true},
+			{name: "small JSON custom minimum", body: smallPayload, minimum: "1024", compressed: true},
+			{name: "tiny JSON with no size benefit", body: []byte("{}"), minimum: "0"},
+			{name: "exact default 64 KiB boundary", body: boundaryPayload, compressed: true},
+			{name: "below default 64 KiB boundary", body: belowBoundaryPayload},
+		} {
+			t.Run(encoding+"/"+scenario.name, func(t *testing.T) {
+				bodyToSend := scenario.body
+				if bodyToSend == nil {
+					bodyToSend = payload
+				}
+				type receivedRequest struct {
+					body              []byte
+					encoding, minimum string
+					length            int64
+					err               error
+				}
+				received := make(chan receivedRequest, 1)
+				streamContext, finishStream := context.WithCancel(context.Background())
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					body, err := io.ReadAll(r.Body)
+					received <- receivedRequest{body: body, err: err, length: r.ContentLength, encoding: r.Header.Get("Content-Encoding"), minimum: r.Header.Get("X-New-Api-Compression-Min-Bytes")}
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = io.WriteString(w, "data: [DONE]\n\n")
+					w.(http.Flusher).Flush()
+					<-streamContext.Done()
+				}))
+				defer server.Close()
+				defer finishStream()
+				ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+				ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+				ctx.Request.Header.Set("Content-Type", "application/json")
+				info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, IsStream: true}
+				info.HeadersOverride = map[string]any{"Content-Encoding": encoding}
+				if scenario.minimum != "" {
+					info.HeadersOverride["X-New-Api-Compression-Min-Bytes"] = scenario.minimum
+				}
+				response, err := DoApiRequest(&gzipTestAdaptor{url: server.URL}, ctx, info, bytes.NewReader(bodyToSend))
+				require.NoError(t, err)
+				defer response.Body.Close()
+				gotRequest := <-received
+				require.NoError(t, gotRequest.err)
+				assert.Empty(t, gotRequest.minimum, "local settings must never reach upstream")
+				assert.EqualValues(t, len(gotRequest.body), gotRequest.length)
+				if scenario.compressed {
+					assert.Equal(t, encoding, gotRequest.encoding)
+					assert.Less(t, len(gotRequest.body), len(bodyToSend))
+					assert.True(t, bytes.Equal(bodyToSend, decodeCompressedRequest(t, gotRequest.body, encoding)), "request must round-trip without changes")
+				} else {
+					assert.Empty(t, gotRequest.encoding)
+					assert.True(t, bytes.Equal(bodyToSend, gotRequest.body), "uncompressed request must remain unchanged")
+				}
+				assert.Empty(t, response.Header.Get("Content-Encoding"))
+				assert.Equal(t, "text/event-stream", response.Header.Get("Content-Type"))
+				responseReader := bufio.NewReader(response.Body)
+				firstEvent, err := responseReader.ReadString('\n')
+				require.NoError(t, err)
+				assert.Equal(t, "data: [DONE]\n", firstEvent, "SSE must arrive before upstream closes")
+				finishStream()
+				tail, err := io.ReadAll(responseReader)
+				require.NoError(t, err)
+				assert.Equal(t, "\n", string(tail))
+			})
+		}
+	}
+	for _, minimum := range []string{"-1", "not a number", "9223372036854775808"} {
+		t.Run("invalid minimum/"+minimum, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(payload))
+			req.Header.Set("Content-Encoding", "zstd")
+			req.Header.Set("X-New-Api-Compression-Min-Bytes", minimum)
+			require.Error(t, compressUpstreamJSONRequest(req))
+			assert.Empty(t, req.Header.Get("X-New-Api-Compression-Min-Bytes"))
+		})
+	}
+}
+
+func TestCompressedRequestHTTP2Retry(t *testing.T) {
+	for _, encoding := range []string{"gzip", "zstd", "br"} {
+		t.Run(encoding, func(t *testing.T) {
+			payload := []byte(`{"input":"` + strings.Repeat("HTTP2 retry with a large context; ", 4096) + `"}`)
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			defer ln.Close()
+			results := runResetOnFirstStreamServer(ln, true)
+			client, transport := newH2PriorKnowledgeClient(ln)
+			defer transport.CloseIdleConnections()
+			body, storage := newPassThroughBody(t, payload)
+			defer storage.Close()
+			req, err := http.NewRequest(http.MethodPost, "http://upstream.test/v1/responses", body)
+			require.NoError(t, err)
+			ApplyUpstreamBodyMetadata(req, body)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Encoding", encoding)
+			req.Header.Set("Content-Length", fmt.Sprint(len(payload)))
+			req.TransferEncoding = []string{"chunked"}
+			require.NoError(t, compressUpstreamJSONRequest(req))
+			assert.Empty(t, req.Header.Get("Content-Length"))
+			assert.Empty(t, req.TransferEncoding)
+
+			resp, err := client.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, 2, resp.ProtoMajor)
+			result := awaitH2ServerResult(t, results)
+			require.NoError(t, result.err)
+			require.Len(t, result.attemptBodies, 2)
+			assert.Equal(t, result.attemptBodies[0], result.attemptBodies[1])
+			assert.EqualValues(t, len(result.attemptBodies[0]), req.ContentLength)
+			assert.Equal(t, payload, decodeCompressedRequest(t, result.attemptBodies[1], encoding))
+			for range 2 {
+				replay, err := req.GetBody()
+				require.NoError(t, err)
+				data, err := io.ReadAll(replay)
+				require.NoError(t, err)
+				require.NoError(t, replay.Close())
+				assert.Equal(t, result.attemptBodies[0], data)
+			}
+			stored, err := storage.Bytes()
+			require.NoError(t, err, "closing the old request body must not close shared storage")
+			assert.Equal(t, payload, stored)
+		})
+	}
 }
 
 func TestApplyUpstreamBodyMetadataSetsReplayableMetadata(t *testing.T) {

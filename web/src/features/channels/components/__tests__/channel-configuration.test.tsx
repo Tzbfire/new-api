@@ -1317,7 +1317,7 @@ test('editing opens the shared configuration and omits an unchanged key on updat
   expect(put.mock.calls[0]?.[1]).not.toHaveProperty('key')
 })
 
-test('channel drawer saves gzip request compression without losing other header overrides', async () => {
+test('channel drawer saves zstd and a custom compression minimum without losing other header overrides', async () => {
   editingChannel.header_override = JSON.stringify({ 'X-Trace': 'keep' })
   const put = vi
     .spyOn(api, 'put')
@@ -1328,16 +1328,26 @@ test('channel drawer saves gzip request compression without losing other header 
   await user.click(screen.getByRole('tab', { name: /Request & Response/ }))
   const toggle = within(
     screen.getByRole('group', { name: 'Override Rules' })
-  ).getByRole('switch', { name: 'Compress upstream JSON requests (gzip)' })
+  ).getByRole('switch', { name: 'Compress upstream JSON requests' })
   expect(toggle).not.toBeChecked()
   await user.click(toggle)
   expect(toggle).toBeChecked()
+  await user.click(
+    screen.getByRole('combobox', { name: 'Request compression algorithm' })
+  )
+  await user.click(screen.getByRole('option', { name: 'zstd' }))
+  const minimum = screen.getByRole('spinbutton', {
+    name: 'Minimum JSON size (KiB)',
+  })
+  await user.clear(minimum)
+  await user.type(minimum, '32')
   await user.click(screen.getByRole('button', { name: 'Update Channel' }))
   await waitFor(() => expect(put).toHaveBeenCalled())
   const payload = put.mock.calls[0]?.[1] as { header_override: string }
   expect(JSON.parse(payload.header_override)).toEqual({
     'X-Trace': 'keep',
-    'Content-Encoding': 'gzip',
+    'Content-Encoding': 'zstd',
+    'X-New-Api-Compression-Min-Bytes': '32768',
   })
 })
 
