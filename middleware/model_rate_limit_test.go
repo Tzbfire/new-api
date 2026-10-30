@@ -329,3 +329,131 @@ func TestModelRateLimitCountsConfiguredModelsPerUser(t *testing.T) {
 		})
 	}
 }
+
+func TestModelRateLimitGroupModelValidation(t *testing.T) {
+	previous := setting.ModelRequestRateLimitGroupModel2JSONString()
+	t.Cleanup(func() { require.NoError(t, setting.UpdateModelRequestRateLimitGroupModelByJSONString(previous)) })
+	valid := `{"default":{"gpt-6-luna":[2,0],"gpt-6.1-luna":[0,2]},"Luna-Pro":{"gpt-6-luna":[0,0]}}`
+	require.NoError(t, setting.CheckModelRequestRateLimitGroupModel(valid))
+	require.NoError(t, setting.UpdateModelRequestRateLimitGroupModelByJSONString(valid))
+	assert.JSONEq(t, valid, setting.ModelRequestRateLimitGroupModel2JSONString())
+	for _, input := range []string{
+		`null`, `[]`, `{"default":null}`, `{"default":[]}`,
+		`{" ":{"gpt-6-luna":[1,1]}}`, `{"default ":{"gpt-6-luna":[1,1]}}`,
+		`{"default":{" ":[1,1]}}`, `{"default":{"gpt-6-luna ":[1,1]}}`,
+		`{"default":{"gpt-6-luna":null}}`, `{"default":{"gpt-6-luna":[0]}}`,
+		`{"default":{"gpt-6-luna":[0,0,1]}}`, `{"default":{"gpt-6-luna":[null,1]}}`,
+		`{"default":{"gpt-6-luna":[1.5,1]}}`, `{"default":{"gpt-6-luna":["1",1]}}`,
+		`{"default":{"gpt-6-luna":[-1,1]}}`, `{"default":{"gpt-6-luna":[1,-1]}}`,
+		`{"default":{"gpt-6-luna":[9223372036854775808,1]}}`,
+		`{"default":{"gpt-6-luna":[106751991167301,1]}}`,
+	} {
+		assert.Error(t, setting.CheckModelRequestRateLimitGroupModel(input), input)
+		assert.Error(t, setting.UpdateModelRequestRateLimitGroupModelByJSONString(input), input)
+		assert.JSONEq(t, valid, setting.ModelRequestRateLimitGroupModel2JSONString(), "invalid updates must preserve active rules")
+	}
+	require.NoError(t, setting.UpdateModelRequestRateLimitGroupModelByJSONString(`{}`))
+	assert.JSONEq(t, `{}`, setting.ModelRequestRateLimitGroupModel2JSONString())
+}
+
+func TestModelRateLimitGroupModelOverridesAndIsolation(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	previousEnabled, previousMinutes := setting.ModelRequestRateLimitEnabled, setting.ModelRequestRateLimitDurationMinutes
+	previousTotal, previousSuccess := setting.ModelRequestRateLimitCount, setting.ModelRequestRateLimitSuccessCount
+	previousRedisEnabled := common.RedisEnabled
+	setting.ModelRequestRateLimitMutex.Lock()
+	previousGroups, previousModels := setting.ModelRequestRateLimitGroup, setting.ModelRequestRateLimitModel
+	previousGroupModels := setting.ModelRequestRateLimitGroupModel
+	setting.ModelRequestRateLimitMutex.Unlock()
+	t.Cleanup(func() {
+		setting.ModelRequestRateLimitEnabled, setting.ModelRequestRateLimitDurationMinutes = previousEnabled, previousMinutes
+		setting.ModelRequestRateLimitCount, setting.ModelRequestRateLimitSuccessCount = previousTotal, previousSuccess
+		common.RedisEnabled = previousRedisEnabled
+		setting.ModelRequestRateLimitMutex.Lock()
+		setting.ModelRequestRateLimitGroup, setting.ModelRequestRateLimitModel = previousGroups, previousModels
+		setting.ModelRequestRateLimitGroupModel = previousGroupModels
+		setting.ModelRequestRateLimitMutex.Unlock()
+	})
+	setting.ModelRequestRateLimitEnabled, setting.ModelRequestRateLimitDurationMinutes = true, 1
+	setting.ModelRequestRateLimitCount, setting.ModelRequestRateLimitSuccessCount = 1, 1
+	for _, backend := range []string{"memory", "redis"} {
+		for _, counts := range [][2]int{{0, 2}, {2, 0}, {2, 2}} {
+			t.Run(fmt.Sprintf("%s/%d-%d", backend, counts[0], counts[1]), func(t *testing.T) {
+				common.RedisEnabled = false
+				if backend == "redis" {
+					redisServer, _ := useRateLimitMiniRedis(t)
+					redisServer.SetTime(time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC))
+				}
+				setting.ModelRequestRateLimitMutex.Lock()
+				setting.ModelRequestRateLimitGroup = map[string][2]int{
+					"default": {1, 1}, "Codex-Plus": {1, 1}, "Codex-Pro": {1, 1}, "Luna-Pro": {1, 1}, "group-only": {0, 2},
+				}
+				setting.ModelRequestRateLimitModel = map[string][2]int{"gpt-6-luna": {1, 1}, "gpt-6.1-luna": {1, 1}, "model-only": {0, 2}}
+				setting.ModelRequestRateLimitGroupModel = map[string]map[string][2]int{
+					"default":    {"gpt-6-luna": counts, "gpt-6.1-luna": counts},
+					"Codex-Plus": {"gpt-6-luna": counts}, "Codex-Pro": {"gpt-6-luna": counts},
+					"Luna-Pro": {"gpt-6-luna": {0, 0}},
+					"a:b":      {"c": {0, 1}}, "a": {"b:c": {0, 1}},
+				}
+				setting.ModelRequestRateLimitMutex.Unlock()
+				userID := 7400000 + 2*int(modelRateLimitTestUsers.Add(1))
+				router := gin.New()
+				router.Use(BodyStorageCleanup(), func(c *gin.Context) {
+					id, _ := strconv.Atoi(c.GetHeader("X-Test-User"))
+					tokenID, _ := strconv.Atoi(c.GetHeader("X-Test-Token"))
+					c.Set("id", id)
+					common.SetContextKey(c, constant.ContextKeyTokenId, tokenID)
+					common.SetContextKey(c, constant.ContextKeyTokenGroup, c.GetHeader("X-Test-Group"))
+					common.SetContextKey(c, constant.ContextKeyUserGroup, "Luna-Pro")
+				}, ModelRequestRateLimit())
+				for _, path := range []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/pg/chat/completions"} {
+					router.POST(path, func(c *gin.Context) { c.Status(http.StatusOK) })
+				}
+				steps := []struct {
+					group, model, path string
+					userID, want       int
+				}{
+					{"default", "gpt-6-luna", "/v1/chat/completions", userID, http.StatusOK},
+					{"default", "gpt-6-luna@effort:high", "/v1/responses", userID, http.StatusOK},
+					{"default", "gpt-6-luna", "/v1/messages", userID, http.StatusTooManyRequests},
+					{"default", "gpt-6-luna", "/pg/chat/completions", userID, http.StatusTooManyRequests},
+					{"Codex-Plus", "gpt-6-luna", "/v1/responses", userID, http.StatusOK},
+					{"Codex-Plus", "gpt-6-luna", "/v1/responses", userID, http.StatusOK},
+					{"Codex-Plus", "gpt-6-luna", "/v1/responses", userID, http.StatusTooManyRequests},
+					{"Codex-Pro", "gpt-6-luna", "/v1/responses", userID, http.StatusOK},
+					{"Codex-Pro", "gpt-6-luna", "/v1/responses", userID, http.StatusOK},
+					{"Codex-Pro", "gpt-6-luna", "/v1/responses", userID, http.StatusTooManyRequests},
+					{"Luna-Pro", "gpt-6-luna", "/v1/responses", userID, http.StatusOK},
+					{"Luna-Pro", "gpt-6-luna", "/v1/responses", userID, http.StatusOK},
+					{"Luna-Pro", "gpt-6-luna@effort:high", "/v1/responses", userID, http.StatusOK},
+					{"", "gpt-6-luna", "/v1/responses", userID, http.StatusOK},
+					{"default", "gpt-6-luna", "/v1/responses", userID + 1, http.StatusOK},
+					{"default", "gpt-6.1-luna", "/v1/responses", userID, http.StatusOK},
+					{"default", "model-only", "/v1/responses", userID, http.StatusOK},
+					{"Codex-Pro", "model-only", "/v1/responses", userID, http.StatusOK},
+					{"default", "model-only", "/v1/responses", userID, http.StatusTooManyRequests},
+					{"group-only", "other-model", "/v1/responses", userID, http.StatusOK},
+					{"group-only", "another-model", "/v1/responses", userID, http.StatusOK},
+					{"group-only", "other-model", "/v1/responses", userID, http.StatusTooManyRequests},
+					{"fallback-a", "other-model", "/v1/responses", userID, http.StatusOK},
+					{"fallback-b", "other-model", "/v1/responses", userID, http.StatusTooManyRequests},
+					{"a:b", "c", "/v1/responses", userID, http.StatusOK},
+					{"a", "b:c", "/v1/responses", userID, http.StatusOK},
+					{"a:b", "c", "/v1/responses", userID, http.StatusTooManyRequests},
+				}
+				for tokenID, step := range steps {
+					body, err := common.Marshal(map[string]string{"model": step.model})
+					require.NoError(t, err)
+					req := httptest.NewRequest(http.MethodPost, step.path, bytes.NewReader(body))
+					req.Header.Set("Content-Type", "application/json")
+					req.Header.Set("X-Test-User", strconv.Itoa(step.userID))
+					req.Header.Set("X-Test-Token", strconv.Itoa(tokenID+1))
+					req.Header.Set("X-Test-Group", step.group)
+					recorder := httptest.NewRecorder()
+					router.ServeHTTP(recorder, req)
+					assert.Equal(t, step.want, recorder.Code, "%s %s %s: %s", step.group, step.model, step.path, recorder.Body.String())
+				}
+			})
+		}
+	}
+}

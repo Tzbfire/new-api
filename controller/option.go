@@ -406,6 +406,12 @@ func UpdateOption(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
+	case "ModelRequestRateLimitGroupModel":
+		err = setting.CheckModelRequestRateLimitGroupModel(option.Value.(string))
+		if err != nil {
+			common.ApiErrorT(c, "Invalid group-model rate limits: {{error}}", map[string]any{"error": err.Error()})
+			return
+		}
 	case "AutomaticDisableStatusCodes":
 		_, err = operation_setting.ParseHTTPStatusCodeRanges(option.Value.(string))
 		if err != nil {

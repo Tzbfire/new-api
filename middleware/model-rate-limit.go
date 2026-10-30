@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"net/http"
@@ -190,7 +191,7 @@ func modelRateLimitRequestModel(c *gin.Context) string {
 	return strings.TrimSpace(request.Model)
 }
 
-func modelRateLimitForModel(model string) (string, int, int, bool) {
+func modelRateLimitForModel(model string, lookup func(string) (int, int, bool)) (string, int, int, bool) {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return "", 0, 0, false
@@ -204,7 +205,7 @@ func modelRateLimitForModel(model string) (string, int, int, bool) {
 		candidates = append(candidates, routed)
 	}
 	for _, candidate := range candidates {
-		if totalCount, successCount, found := setting.GetModelRateLimit(candidate); found {
+		if totalCount, successCount, found := lookup(candidate); found {
 			return candidate, totalCount, successCount, true
 		}
 	}
@@ -231,11 +232,23 @@ func ModelRequestRateLimit() func(c *gin.Context) {
 			group = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 		}
 
-		// Model-specific rules take precedence over group and global rules. The
-		// model key is paired with the user id so one heavy user cannot consume
-		// another user's model budget.
+		// The most specific rule wins: group+model, model, group, then global.
 		subject := strconv.Itoa(c.GetInt("id"))
-		if modelKey, modelTotalCount, modelSuccessCount, found := modelRateLimitForModel(modelRateLimitRequestModel(c)); found {
+		requestModel := modelRateLimitRequestModel(c)
+		if modelKey, modelTotalCount, modelSuccessCount, found := modelRateLimitForModel(requestModel, func(model string) (int, int, bool) {
+			return setting.GetGroupModelRateLimit(group, model)
+		}); found {
+			// An explicit zero rule exempts this group/model from all fallbacks.
+			if modelTotalCount == 0 && modelSuccessCount == 0 {
+				c.Next()
+				return
+			}
+			totalMaxCount = modelTotalCount
+			successMaxCount = modelSuccessCount
+			// Keep the legacy keys intact; encode names in a separate namespace
+			// so group/model delimiters cannot collide with another rule.
+			subject = "group-model:" + subject + ":" + base64.RawURLEncoding.EncodeToString([]byte(group)) + ":" + base64.RawURLEncoding.EncodeToString([]byte(modelKey))
+		} else if modelKey, modelTotalCount, modelSuccessCount, found := modelRateLimitForModel(requestModel, setting.GetModelRateLimit); found {
 			totalMaxCount = modelTotalCount
 			successMaxCount = modelSuccessCount
 			subject += ":model:" + modelKey

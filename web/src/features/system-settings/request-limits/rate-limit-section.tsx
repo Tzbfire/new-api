@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQuery } from '@tanstack/react-query'
 import { Code2, Palette } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
@@ -36,6 +37,9 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { getAllModels } from '@/features/channels/api'
+import { getGroups } from '@/features/users/api'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import {
   SettingsForm,
@@ -45,20 +49,46 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+import { safeJsonParseWithValidation } from '../utils/json-parser'
+import { isObjectRecord } from '../utils/json-validators'
 import { RateLimitVisualEditor } from './rate-limit-visual-editor'
 
-const isValidJSON = (value: string | undefined) => {
+const isValidJSON = (value: string | undefined, groupModel = false) => {
   if (!value || value.trim() === '') return true
   try {
     const parsed = JSON.parse(value)
-    if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+    if (!isObjectRecord(parsed)) {
       return false
     }
-    for (const [, val] of Object.entries(parsed)) {
-      if (!Array.isArray(val) || val.length !== 2) return false
-      if (typeof val[0] !== 'number' || typeof val[1] !== 'number') return false
-      if (val[0] < 0 || val[1] < 1) return false
-      if (val[0] > 2147483647 || val[1] > 2147483647) return false
+    for (const [name, val] of Object.entries(parsed)) {
+      if (!name.trim()) return false
+      if (groupModel) {
+        if (name !== name.trim()) return false
+        if (!isObjectRecord(val)) return false
+        for (const [model, limits] of Object.entries(val)) {
+          if (
+            !model.trim() ||
+            model !== model.trim() ||
+            !Array.isArray(limits) ||
+            limits.length !== 2
+          ) {
+            return false
+          }
+          if (
+            !limits.every(
+              (count) =>
+                Number.isInteger(count) && count >= 0 && count <= 2147483647
+            )
+          ) {
+            return false
+          }
+        }
+      } else {
+        if (!Array.isArray(val) || val.length !== 2) return false
+        if (!val.every(Number.isInteger)) return false
+        if (val[0] < 0 || val[1] < 1) return false
+        if (val[0] > 2147483647 || val[1] > 2147483647) return false
+      }
     }
     return true
   } catch {
@@ -75,13 +105,19 @@ const createRateLimitSchema = (t: (key: string) => string) =>
     ModelRequestRateLimitGroup: z
       .string()
       .optional()
-      .refine(isValidJSON, {
+      .refine((value) => isValidJSON(value), {
         message: t('Invalid JSON format or values out of allowed range'),
       }),
     ModelRequestRateLimitModel: z
       .string()
       .optional()
-      .refine(isValidJSON, {
+      .refine((value) => isValidJSON(value), {
+        message: t('Invalid JSON format or values out of allowed range'),
+      }),
+    ModelRequestRateLimitGroupModel: z
+      .string()
+      .optional()
+      .refine((value) => isValidJSON(value, true), {
         message: t('Invalid JSON format or values out of allowed range'),
       }),
   })
@@ -95,8 +131,22 @@ type RateLimitSectionProps = {
 export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const { data: availableGroups } = useQuery({
+    queryKey: ['groups'],
+    queryFn: async () => requireServerSuccess(await getGroups()),
+    staleTime: 5 * 60 * 1000,
+    meta: { errorToast: false },
+  })
+  const { data: availableModels } = useQuery({
+    queryKey: ['channel_models'],
+    queryFn: async () => requireServerSuccess(await getAllModels()),
+    staleTime: 5 * 60 * 1000,
+    meta: { errorToast: false },
+  })
   const [useVisualEditor, setUseVisualEditor] = useState(true)
   const [useModelVisualEditor, setUseModelVisualEditor] = useState(true)
+  const [useGroupModelVisualEditor, setUseGroupModelVisualEditor] =
+    useState(true)
 
   const rateLimitSchema = createRateLimitSchema(t)
 
@@ -105,6 +155,14 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
     mode: 'onChange', // Enable real-time validation
     defaultValues,
   })
+  const groupRules = safeJsonParseWithValidation<Record<string, unknown>>(
+    form.watch('ModelRequestRateLimitGroup'),
+    { fallback: {}, validator: isObjectRecord, silent: true }
+  )
+  const modelRules = safeJsonParseWithValidation<Record<string, unknown>>(
+    form.watch('ModelRequestRateLimitModel'),
+    { fallback: {}, validator: isObjectRecord, silent: true }
+  )
 
   useEffect(() => {
     form.reset(defaultValues)
@@ -117,7 +175,11 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
     )
 
     for (const [key, value] of updates) {
-      await updateOption.mutateAsync({ key, value: value ?? '' })
+      const nextValue =
+        key === 'ModelRequestRateLimitGroupModel' && !value?.toString().trim()
+          ? '{}'
+          : (value ?? '')
+      await updateOption.mutateAsync({ key, value: nextValue })
     }
   }
 
@@ -130,6 +192,12 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
             isSaving={updateOption.isPending}
             saveLabel='Save rate limits'
           />
+
+          <p className='text-muted-foreground text-sm'>
+            {t(
+              'Rule priority: group + model > model > group > global. All rules use the same period.'
+            )}
+          </p>
           <FormField
             control={form.control}
             name='ModelRequestRateLimitEnabled'
@@ -160,8 +228,8 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>{t('Limit period')}</FormLabel>
-                  <FormControl>
-                    <div className='flex items-center gap-2'>
+                  <div className='flex items-center gap-2'>
+                    <FormControl>
                       <Input
                         type='number'
                         min={0}
@@ -171,11 +239,11 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                           field.onChange(Number.parseInt(e.target.value) || 0)
                         }
                       />
-                      <span className='text-muted-foreground text-sm'>
-                        {t('minutes')}
-                      </span>
-                    </div>
-                  </FormControl>
+                    </FormControl>
+                    <span className='text-muted-foreground text-sm'>
+                      {t('minutes')}
+                    </span>
+                  </div>
                   <FormDescription>
                     {t('Time window for rate limiting')}
                   </FormDescription>
@@ -190,8 +258,8 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>{t('Max requests per period')}</FormLabel>
-                  <FormControl>
-                    <div className='flex items-center gap-2'>
+                  <div className='flex items-center gap-2'>
+                    <FormControl>
                       <Input
                         type='number'
                         min={0}
@@ -202,11 +270,11 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                           field.onChange(Number.parseInt(e.target.value) || 0)
                         }
                       />
-                      <span className='text-muted-foreground text-sm'>
-                        {t('times')}
-                      </span>
-                    </div>
-                  </FormControl>
+                    </FormControl>
+                    <span className='text-muted-foreground text-sm'>
+                      {t('times')}
+                    </span>
+                  </div>
                   <FormDescription>
                     {t('Including failed requests, 0 = unlimited')}
                   </FormDescription>
@@ -221,8 +289,8 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>{t('Max successful requests')}</FormLabel>
-                  <FormControl>
-                    <div className='flex items-center gap-2'>
+                  <div className='flex items-center gap-2'>
+                    <FormControl>
                       <Input
                         type='number'
                         min={1}
@@ -233,11 +301,11 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                           field.onChange(Number.parseInt(e.target.value) || 1)
                         }
                       />
-                      <span className='text-muted-foreground text-sm'>
-                        {t('times')}
-                      </span>
-                    </div>
-                  </FormControl>
+                    </FormControl>
+                    <span className='text-muted-foreground text-sm'>
+                      {t('times')}
+                    </span>
+                  </div>
                   <FormDescription>
                     {t('Only successful requests')}
                   </FormDescription>
@@ -246,6 +314,85 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
               )}
             />
           </div>
+
+          <FormField
+            control={form.control}
+            name='ModelRequestRateLimitGroupModel'
+            render={({ field }) => (
+              <FormItem>
+                <div className='flex items-center justify-between gap-4'>
+                  <FormLabel>{t('Group and model rate limits')}</FormLabel>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    onClick={() =>
+                      setUseGroupModelVisualEditor(!useGroupModelVisualEditor)
+                    }
+                  >
+                    {useGroupModelVisualEditor ? (
+                      <>
+                        <Code2 className='mr-2 h-4 w-4' />
+                        {t('JSON Mode')}
+                      </>
+                    ) : (
+                      <>
+                        <Palette className='mr-2 h-4 w-4' />
+                        {t('Visual Mode')}
+                      </>
+                    )}
+                  </Button>
+                </div>
+                <FormDescription>
+                  {t(
+                    'Rules are counted separately for each user, group, and model.'
+                  )}{' '}
+                  {t(
+                    'An unlimited group-model rule overrides model, group, and global limits.'
+                  )}
+                </FormDescription>
+                <FormControl>
+                  {useGroupModelVisualEditor ? (
+                    <RateLimitVisualEditor
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      entity='group-model'
+                      groupNames={[
+                        ...(availableGroups?.data ?? []),
+                        ...Object.keys(groupRules),
+                      ]}
+                      modelNames={[
+                        ...(availableModels?.data?.map((model) => model.id) ??
+                          []),
+                        ...Object.keys(modelRules),
+                      ]}
+                    />
+                  ) : (
+                    <JsonCodeEditor
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
+                      ariaLabel={t('Group and model rate limits')}
+                      placeholder={`{\n  "default": {"gpt-6-luna": [3000, 2000]},\n  "Luna-Pro": {"gpt-6-luna": [0, 0]}\n}`}
+                      aria-invalid={Boolean(
+                        form.formState.errors.ModelRequestRateLimitGroupModel
+                      )}
+                    />
+                  )}
+                </FormControl>
+                {!useGroupModelVisualEditor && (
+                  <p className='text-muted-foreground text-xs'>
+                    {t(
+                      'Use [0, 0] for unlimited requests. Other values must be integers from 0 to 2,147,483,647.'
+                    )}
+                  </p>
+                )}
+                <FormMessage />
+              </FormItem>
+            )}
+          />
 
           <FormField
             control={form.control}

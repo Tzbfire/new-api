@@ -66,7 +66,7 @@ func SetRelayRouter(router *gin.Engine) {
 	playgroundRouter.Use(middleware.SystemPerformanceCheck())
 	playgroundRouter.Use(middleware.UserAuth())
 	{
-		playgroundRouter.POST("/chat/completions", middleware.Distribute(), controller.Playground)
+		playgroundRouter.POST("/chat/completions", middleware.Distribute(), middleware.ModelRequestRateLimit(), controller.Playground)
 		imageStudioRouter := playgroundRouter.Group("/image-studio")
 		{
 			imageStudioRouter.GET("/config", controller.GetImageStudioConfig)
