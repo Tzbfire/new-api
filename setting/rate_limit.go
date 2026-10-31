@@ -40,13 +40,12 @@ func ModelRequestRateLimitGroup2JSONString() string {
 }
 
 func UpdateModelRequestRateLimitGroupByJSONString(jsonStr string) error {
-	ModelRequestRateLimitMutex.Lock()
-	defer ModelRequestRateLimitMutex.Unlock()
-
-	groupLimits := make(map[string][2]int)
-	if err := common.Unmarshal([]byte(jsonStr), &groupLimits); err != nil {
+	groupLimits, err := parseRequestRateLimits(jsonStr, "group")
+	if err != nil {
 		return err
 	}
+	ModelRequestRateLimitMutex.Lock()
+	defer ModelRequestRateLimitMutex.Unlock()
 	ModelRequestRateLimitGroup = groupLimits
 	return nil
 }
@@ -78,8 +77,8 @@ func ModelRequestRateLimitModel2JSONString() string {
 }
 
 func UpdateModelRequestRateLimitModelByJSONString(jsonStr string) error {
-	modelLimits := make(map[string][2]int)
-	if err := common.Unmarshal([]byte(jsonStr), &modelLimits); err != nil {
+	modelLimits, err := parseRequestRateLimits(jsonStr, "model")
+	if err != nil {
 		return err
 	}
 
@@ -138,15 +137,9 @@ func parseGroupModelRateLimits(jsonStr string) (map[string]map[string][2]int, er
 			if model == "" || model != strings.TrimSpace(model) {
 				return nil, fmt.Errorf("model name cannot be empty or contain surrounding whitespace")
 			}
-			if len(values) != 2 || values[0] == nil || values[1] == nil {
-				return nil, fmt.Errorf("group %s model %s rate limit must contain exactly two integers", group, model)
-			}
-			limits := [2]int{*values[0], *values[1]}
-			if limits[0] < 0 || limits[1] < 0 {
-				return nil, fmt.Errorf("group %s model %s has negative rate limit values: [%d, %d]", group, model, limits[0], limits[1])
-			}
-			if int64(limits[0]) > maxModelRequestRateLimitCount || int64(limits[1]) > maxModelRequestRateLimitCount {
-				return nil, fmt.Errorf("group %s model %s [%d, %d] exceeds max rate limit %d", group, model, limits[0], limits[1], maxModelRequestRateLimitCount)
+			limits, err := parseRequestRateLimitCounts(values)
+			if err != nil {
+				return nil, fmt.Errorf("group %s model %s: %w", group, model, err)
 			}
 			groupModels[group][model] = limits
 		}
@@ -179,40 +172,48 @@ func GetGroupModelRateLimit(group, model string) (totalCount, successCount int, 
 }
 
 func CheckModelRequestRateLimitGroup(jsonStr string) error {
-	checkModelRequestRateLimitGroup := make(map[string][2]int)
-	err := common.Unmarshal([]byte(jsonStr), &checkModelRequestRateLimitGroup)
-	if err != nil {
-		return err
-	}
-	for group, limits := range checkModelRequestRateLimitGroup {
-		if limits[0] < 0 || limits[1] < 1 {
-			return fmt.Errorf("group %s has negative rate limit values: [%d, %d]", group, limits[0], limits[1])
-		}
-		if int64(limits[0]) > maxModelRequestRateLimitCount || int64(limits[1]) > maxModelRequestRateLimitCount {
-			return fmt.Errorf("group %s [%d, %d] exceeds max rate limit %d", group, limits[0], limits[1], maxModelRequestRateLimitCount)
-		}
-	}
-
-	return nil
+	_, err := parseRequestRateLimits(jsonStr, "group")
+	return err
 }
 
 func CheckModelRequestRateLimitModel(jsonStr string) error {
-	checkModelRequestRateLimitModel := make(map[string][2]int)
-	if err := common.Unmarshal([]byte(jsonStr), &checkModelRequestRateLimitModel); err != nil {
-		return err
+	_, err := parseRequestRateLimits(jsonStr, "model")
+	return err
+}
+
+func parseRequestRateLimits(jsonStr, scope string) (map[string][2]int, error) {
+	var input map[string][]*int
+	if err := common.UnmarshalJsonStr(jsonStr, &input); err != nil {
+		return nil, err
+	}
+	if input == nil {
+		return nil, fmt.Errorf("%s rate limits must be an object", scope)
 	}
 
-	for model, limits := range checkModelRequestRateLimitModel {
-		if strings.TrimSpace(model) == "" {
-			return fmt.Errorf("model name cannot be empty")
+	limitsByName := make(map[string][2]int, len(input))
+	for name, values := range input {
+		if scope == "model" && strings.TrimSpace(name) == "" {
+			return nil, fmt.Errorf("model name cannot be empty")
 		}
-		if limits[0] < 0 || limits[1] < 1 {
-			return fmt.Errorf("model %s has negative rate limit values: [%d, %d]", model, limits[0], limits[1])
+		limits, err := parseRequestRateLimitCounts(values)
+		if err != nil {
+			return nil, fmt.Errorf("%s %s: %w", scope, name, err)
 		}
-		if int64(limits[0]) > maxModelRequestRateLimitCount || int64(limits[1]) > maxModelRequestRateLimitCount {
-			return fmt.Errorf("model %s [%d, %d] exceeds max rate limit %d", model, limits[0], limits[1], maxModelRequestRateLimitCount)
-		}
+		limitsByName[name] = limits
 	}
+	return limitsByName, nil
+}
 
-	return nil
+func parseRequestRateLimitCounts(values []*int) ([2]int, error) {
+	if len(values) != 2 || values[0] == nil || values[1] == nil {
+		return [2]int{}, fmt.Errorf("rate limit must contain exactly two integers")
+	}
+	limits := [2]int{*values[0], *values[1]}
+	if limits[0] < 0 || limits[1] < 0 {
+		return [2]int{}, fmt.Errorf("negative rate limit values: [%d, %d]", limits[0], limits[1])
+	}
+	if int64(limits[0]) > maxModelRequestRateLimitCount || int64(limits[1]) > maxModelRequestRateLimitCount {
+		return [2]int{}, fmt.Errorf("[%d, %d] exceeds max rate limit %d", limits[0], limits[1], maxModelRequestRateLimitCount)
+	}
+	return limits, nil
 }

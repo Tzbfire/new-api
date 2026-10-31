@@ -356,6 +356,106 @@ func TestModelRateLimitGroupModelValidation(t *testing.T) {
 	assert.JSONEq(t, `{}`, setting.ModelRequestRateLimitGroupModel2JSONString())
 }
 
+func TestModelRateLimitFlatSettingsValidation(t *testing.T) {
+	for _, scope := range []struct {
+		name    string
+		check   func(string) error
+		update  func(string) error
+		current func() string
+	}{
+		{"group", setting.CheckModelRequestRateLimitGroup, setting.UpdateModelRequestRateLimitGroupByJSONString, setting.ModelRequestRateLimitGroup2JSONString},
+		{"model", setting.CheckModelRequestRateLimitModel, setting.UpdateModelRequestRateLimitModelByJSONString, setting.ModelRequestRateLimitModel2JSONString},
+	} {
+		t.Run(scope.name, func(t *testing.T) {
+			previous := scope.current()
+			t.Cleanup(func() { require.NoError(t, scope.update(previous)) })
+			valid := `{"legacy: name ":[0,0],"total":[2,0],"success":[0,2],"both":[2,2]}`
+			require.NoError(t, scope.check(valid))
+			require.NoError(t, scope.update(valid))
+			assert.JSONEq(t, valid, scope.current(), "existing names must remain unchanged")
+			for _, input := range []string{
+				`null`, `[]`, `{"rule":null}`, `{"rule":[]}`, `{"rule":[0]}`, `{"rule":[0,0,1]}`,
+				`{"rule":[null,0]}`, `{"rule":[0,null]}`, `{"rule":[1.5,0]}`, `{"rule":["1",0]}`,
+				`{"rule":[-1,0]}`, `{"rule":[0,-1]}`, `{"rule":[9223372036854775808,0]}`,
+				`{"rule":[106751991167301,0]}`,
+			} {
+				assert.Error(t, scope.check(input), input)
+				assert.Error(t, scope.update(input), input)
+				assert.JSONEq(t, valid, scope.current(), "invalid updates must preserve active rules")
+			}
+			require.NoError(t, scope.update(`{}`))
+			assert.JSONEq(t, `{}`, scope.current())
+		})
+	}
+}
+
+func TestModelRateLimitZeroAndTotalOnlyScopes(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	previousEnabled, previousMinutes := setting.ModelRequestRateLimitEnabled, setting.ModelRequestRateLimitDurationMinutes
+	previousTotal, previousSuccess := setting.ModelRequestRateLimitCount, setting.ModelRequestRateLimitSuccessCount
+	previousRedisEnabled := common.RedisEnabled
+	previousGroups, previousModels := setting.ModelRequestRateLimitGroup2JSONString(), setting.ModelRequestRateLimitModel2JSONString()
+	previousGroupModels := setting.ModelRequestRateLimitGroupModel2JSONString()
+	t.Cleanup(func() {
+		setting.ModelRequestRateLimitEnabled, setting.ModelRequestRateLimitDurationMinutes = previousEnabled, previousMinutes
+		setting.ModelRequestRateLimitCount, setting.ModelRequestRateLimitSuccessCount = previousTotal, previousSuccess
+		common.RedisEnabled = previousRedisEnabled
+		require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(previousGroups))
+		require.NoError(t, setting.UpdateModelRequestRateLimitModelByJSONString(previousModels))
+		require.NoError(t, setting.UpdateModelRequestRateLimitGroupModelByJSONString(previousGroupModels))
+	})
+	setting.ModelRequestRateLimitEnabled, setting.ModelRequestRateLimitDurationMinutes = true, 1
+	for _, backend := range []string{"memory", "redis"} {
+		for _, scope := range []string{"global", "group", "model", "group-model"} {
+			for _, total := range []int{0, 1} {
+				t.Run(fmt.Sprintf("%s/%s/total=%d", backend, scope, total), func(t *testing.T) {
+					common.RedisEnabled = false
+					if backend == "redis" {
+						redisServer, _ := useRateLimitMiniRedis(t)
+						redisServer.SetTime(time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC))
+					}
+					setting.ModelRequestRateLimitCount, setting.ModelRequestRateLimitSuccessCount = 1, 1
+					require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(`{}`))
+					require.NoError(t, setting.UpdateModelRequestRateLimitModelByJSONString(`{}`))
+					require.NoError(t, setting.UpdateModelRequestRateLimitGroupModelByJSONString(`{}`))
+					flatRule := fmt.Sprintf(`{"limited":[%d,0]}`, total)
+					switch scope {
+					case "global":
+						setting.ModelRequestRateLimitCount, setting.ModelRequestRateLimitSuccessCount = total, 0
+					case "group":
+						require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(flatRule))
+					case "model":
+						require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(`{"limited":[1,1]}`))
+						require.NoError(t, setting.UpdateModelRequestRateLimitModelByJSONString(flatRule))
+					case "group-model":
+						require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(`{"limited":[1,1]}`))
+						require.NoError(t, setting.UpdateModelRequestRateLimitModelByJSONString(`{"limited":[1,1]}`))
+						require.NoError(t, setting.UpdateModelRequestRateLimitGroupModelByJSONString(fmt.Sprintf(`{"limited":{"limited":[%d,0]}}`, total)))
+					}
+					userID := 7500000 + int(modelRateLimitTestUsers.Add(1))
+					router := gin.New()
+					router.Use(BodyStorageCleanup(), func(c *gin.Context) {
+						c.Set("id", userID)
+						common.SetContextKey(c, constant.ContextKeyTokenGroup, "limited")
+					}, ModelRequestRateLimit())
+					router.POST("/v1/responses", func(c *gin.Context) { c.Status(http.StatusOK) })
+					for i := range 3 {
+						request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"limited"}`))
+						request.Header.Set("Content-Type", "application/json")
+						recorder := httptest.NewRecorder()
+						router.ServeHTTP(recorder, request)
+						want := http.StatusOK
+						if total > 0 && i > 0 {
+							want = http.StatusTooManyRequests
+						}
+						assert.Equal(t, want, recorder.Code, recorder.Body.String())
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestModelRateLimitGroupModelOverridesAndIsolation(t *testing.T) {
 	require.NoError(t, i18n.Init())
 	previousEnabled, previousMinutes := setting.ModelRequestRateLimitEnabled, setting.ModelRequestRateLimitDurationMinutes

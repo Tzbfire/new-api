@@ -17,14 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect } from 'react'
+import { useEffect, useId } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
 
 import { Dialog } from '@/components/dialog'
+import { MultiSelect } from '@/components/multi-select'
 import { Button } from '@/components/ui/button'
-import { ComboboxInput } from '@/components/ui/combobox-input'
 import {
   Form,
   FormControl,
@@ -37,38 +37,37 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 
-const RATE_LIMIT_FORM_ID = 'rate-limit-form'
-
-export type RateLimitEntryData = {
-  name: string
-  groupName?: string
-  maxRequests: number
-  maxSuccess: number
-}
-
-export type RateLimitEntity = 'group' | 'model' | 'group-model'
+import {
+  getRateLimitRuleKey,
+  type RateLimitRule,
+  type RateLimitSelection,
+} from './lib/rate-limit-rules'
 
 type RateLimitDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSave: (data: RateLimitEntryData) => void
-  editData?: RateLimitEntryData | null
-  entity?: RateLimitEntity
+  onSave: (selection: RateLimitSelection) => void
+  editData?: RateLimitRule | null
+  existingRules: RateLimitRule[]
   groupNames?: string[]
   modelNames?: string[]
-  existingEntries?: RateLimitEntryData[]
 }
 
 export function RateLimitDialog(props: RateLimitDialogProps) {
   const { t } = useTranslation()
-  const entity = props.entity ?? 'group'
-  const isGroupModel = entity === 'group-model'
-  const isModel = entity === 'model' || isGroupModel
+  const formId = useId()
   const isEditMode = Boolean(props.editData)
+  const isGlobalEdit = Boolean(
+    props.editData &&
+    props.editData.group === null &&
+    props.editData.model === null
+  )
   const schema = z
     .object({
-      name: z.string().trim().min(1, t('Name is required')),
-      groupName: z.string().trim(),
+      allGroups: z.boolean(),
+      allModels: z.boolean(),
+      groups: z.array(z.string().trim().min(1, t('Name is required'))),
+      models: z.array(z.string().trim().min(1, t('Name is required'))),
       unlimited: z.boolean(),
       maxRequests: z
         .number({ error: t('Amount must be a whole number') })
@@ -78,14 +77,24 @@ export function RateLimitDialog(props: RateLimitDialogProps) {
       maxSuccess: z
         .number({ error: t('Amount must be a whole number') })
         .int(t('Amount must be a whole number'))
-        .min(
-          isGroupModel ? 0 : 1,
-          isGroupModel ? t('Must be ≥ 0') : t('Must be ≥ 1')
-        )
+        .min(0, t('Must be ≥ 0'))
         .max(2147483647, t('Must be ≤ 2,147,483,647')),
     })
     .superRefine((values, ctx) => {
-      if (!isGroupModel) return
+      if (!values.allGroups && values.groups.length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['groups'],
+          message: t('Select at least one group or enable All groups.'),
+        })
+      }
+      if (!values.allModels && values.models.length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['models'],
+          message: t('Select at least one model or enable All models.'),
+        })
+      }
       if (
         !values.unlimited &&
         values.maxRequests === 0 &&
@@ -97,87 +106,82 @@ export function RateLimitDialog(props: RateLimitDialogProps) {
           message: t('Must be ≥ 1'),
         })
       }
-      if (!values.groupName) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['groupName'],
-          message: t('Name is required'),
-        })
-      }
-      if (
-        !isEditMode &&
-        props.existingEntries?.some(
-          (entry) =>
-            entry.groupName === values.groupName && entry.name === values.name
-        )
-      ) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['name'],
-          message: t('Rule already exists for this group and model.'),
-        })
+      const editKey = props.editData
+        ? getRateLimitRuleKey(props.editData)
+        : null
+      const existingKeys = new Set(
+        props.existingRules
+          .filter((rule) => getRateLimitRuleKey(rule) !== editKey)
+          .map(getRateLimitRuleKey)
+      )
+      const groups = values.allGroups ? [null] : values.groups
+      const models = values.allModels ? [null] : values.models
+      for (const group of groups) {
+        for (const model of models) {
+          if (existingKeys.has(getRateLimitRuleKey({ group, model }))) {
+            ctx.addIssue({
+              code: 'custom',
+              path: ['models'],
+              message: t('Rule already exists for this group and model.'),
+            })
+            return
+          }
+        }
       }
     })
   type FormValues = z.infer<typeof schema>
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      name: '',
-      groupName: '',
+      allGroups: false,
+      allModels: false,
+      groups: [],
+      models: [],
       unlimited: false,
       maxRequests: 0,
       maxSuccess: 1,
     },
   })
-  const unlimited = isGroupModel && form.watch('unlimited')
+  const allGroups = form.watch('allGroups')
+  const allModels = form.watch('allModels')
+  const unlimited = form.watch('unlimited')
 
   useEffect(() => {
     const entry = props.editData
     form.reset({
-      name: entry?.name ?? '',
-      groupName: entry?.groupName ?? '',
-      unlimited:
-        isGroupModel && entry?.maxRequests === 0 && entry.maxSuccess === 0,
+      allGroups: entry?.group === null,
+      allModels: entry?.model === null,
+      groups: entry?.group == null ? [] : [entry.group],
+      models: entry?.model == null ? [] : [entry.model],
+      unlimited: entry?.maxRequests === 0 && entry.maxSuccess === 0,
       maxRequests: entry?.maxRequests ?? 0,
       maxSuccess: entry?.maxSuccess ?? 1,
     })
-  }, [props.editData, props.open, isGroupModel, form])
+  }, [props.editData, props.open, form])
 
-  let title: string
-  let description: string
-  if (isGroupModel) {
-    title = isEditMode
-      ? t('Edit group-model rate limit')
-      : t('Add group-model rate limit')
-    description = t('Configure per-user model limits within a specific group.')
-  } else if (isModel) {
-    title = isEditMode ? t('Edit model rate limit') : t('Add model rate limit')
-    description = t('Configure model request limits for each user.')
-  } else {
-    title = isEditMode ? t('Edit group rate limit') : t('Add group rate limit')
-    description = t('Configure rate limiting rules for a specific user group.')
-  }
-  let nameDescription: string
-  if (isGroupModel) {
-    nameDescription = isEditMode
-      ? t('Group and model names cannot be changed when editing.')
-      : t('Unique model name within this group.')
-  } else if (isEditMode) {
-    nameDescription = isModel
-      ? t('Model name cannot be changed when editing.')
-      : t('Group name cannot be changed when editing.')
-  } else {
-    nameDescription = isModel
-      ? t('Unique model name for this rule.')
-      : t('Unique identifier for this group.')
-  }
+  const groupOptions = [
+    ...new Set([
+      ...(props.groupNames ?? []),
+      ...props.existingRules.flatMap((rule) =>
+        rule.group === null ? [] : [rule.group]
+      ),
+    ]),
+  ].map((value) => ({ value, label: value }))
+  const modelOptions = [
+    ...new Set([
+      ...(props.modelNames ?? []),
+      ...props.existingRules.flatMap((rule) =>
+        rule.model === null ? [] : [rule.model]
+      ),
+    ]),
+  ].map((value) => ({ value, label: value }))
 
   const handleSubmit = (values: FormValues) => {
     props.onSave({
-      name: values.name,
-      ...(isGroupModel ? { groupName: values.groupName } : {}),
-      maxRequests: unlimited ? 0 : values.maxRequests,
-      maxSuccess: unlimited ? 0 : values.maxSuccess,
+      groups: values.allGroups || isGlobalEdit ? [] : values.groups,
+      models: values.allModels || isGlobalEdit ? [] : values.models,
+      maxRequests: values.unlimited ? 0 : values.maxRequests,
+      maxSuccess: values.unlimited ? 0 : values.maxSuccess,
     })
     props.onOpenChange(false)
   }
@@ -186,9 +190,11 @@ export function RateLimitDialog(props: RateLimitDialogProps) {
     <Dialog
       open={props.open}
       onOpenChange={props.onOpenChange}
-      title={title}
-      description={description}
-      contentClassName='sm:max-w-[500px]'
+      title={isEditMode ? t('Edit rate limit rule') : t('Add rate limit rule')}
+      description={t(
+        'Selected groups and models create a separate rule for every combination.'
+      )}
+      contentClassName='sm:max-w-[560px]'
       contentHeight='auto'
       bodyClassName='space-y-4'
       footer={
@@ -200,7 +206,7 @@ export function RateLimitDialog(props: RateLimitDialogProps) {
           >
             {t('Cancel')}
           </Button>
-          <Button type='submit' form={RATE_LIMIT_FORM_ID}>
+          <Button type='submit' form={formId}>
             {isEditMode ? t('Update') : t('Add')}
           </Button>
         </>
@@ -208,110 +214,129 @@ export function RateLimitDialog(props: RateLimitDialogProps) {
     >
       <Form {...form}>
         <form
-          id={RATE_LIMIT_FORM_ID}
-          onSubmit={form.handleSubmit(handleSubmit)}
+          id={formId}
+          onSubmit={(event) => {
+            event.stopPropagation()
+            void form.handleSubmit(handleSubmit)(event)
+          }}
           className='space-y-4'
         >
-          {isGroupModel && (
+          <div className='space-y-2'>
             <FormField
               control={form.control}
-              name='groupName'
+              name='allGroups'
+              render={({ field }) => (
+                <FormItem className='flex items-center justify-between gap-4'>
+                  <FormLabel>{t('All groups')}</FormLabel>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                      disabled={isGlobalEdit}
+                    />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='groups'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Group Name')}</FormLabel>
+                  <FormLabel>{t('Groups')}</FormLabel>
                   <FormControl>
-                    <ComboboxInput
-                      options={(props.groupNames ?? []).map((value) => ({
-                        value,
-                        label: value,
-                      }))}
-                      value={field.value}
-                      onValueChange={field.onChange}
-                      allowCustomValue
-                      disabled={isEditMode}
-                      placeholder={t('e.g., default, vip, premium')}
-                      aria-label={t('Group Name')}
+                    <MultiSelect
+                      options={groupOptions}
+                      selected={field.value}
+                      onChange={field.onChange}
+                      allowCreate
+                      maxVisibleChips={5}
+                      placeholder={t('Select groups')}
+                      disabled={allGroups || isGlobalEdit}
                     />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
             />
-          )}
-          <FormField
-            control={form.control}
-            name='name'
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>
-                  {t(isModel ? 'Model Name' : 'Group Name')}
-                </FormLabel>
-                <FormControl>
-                  {isGroupModel ? (
-                    <ComboboxInput
-                      options={(props.modelNames ?? []).map((value) => ({
-                        value,
-                        label: value,
-                      }))}
-                      value={field.value}
-                      onValueChange={field.onChange}
-                      allowCustomValue
-                      disabled={isEditMode}
-                      placeholder={t('e.g., gpt-4, claude-3')}
-                      aria-label={t('Model Name')}
-                    />
-                  ) : (
-                    <Input
-                      placeholder={t(
-                        isModel
-                          ? 'e.g., gpt-4, claude-3'
-                          : 'e.g., default, vip, premium'
-                      )}
-                      {...field}
-                      disabled={isEditMode}
-                    />
-                  )}
-                </FormControl>
-                <FormDescription>{nameDescription}</FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          {isGroupModel && (
+          </div>
+          <div className='space-y-2'>
             <FormField
               control={form.control}
-              name='unlimited'
+              name='allModels'
               render={({ field }) => (
                 <FormItem className='flex items-center justify-between gap-4'>
-                  <div>
-                    <FormLabel>{t('Unlimited')}</FormLabel>
-                    <FormDescription>
-                      {t(
-                        'An unlimited group-model rule overrides model, group, and global limits.'
-                      )}
-                    </FormDescription>
-                  </div>
+                  <FormLabel>{t('All models')}</FormLabel>
                   <FormControl>
                     <Switch
                       checked={field.value}
-                      onCheckedChange={(checked) => {
-                        field.onChange(checked)
-                        if (checked) {
-                          form.setValue('maxRequests', 0)
-                          form.setValue('maxSuccess', 0)
-                        } else if (
-                          form.getValues('maxRequests') === 0 &&
-                          form.getValues('maxSuccess') === 0
-                        ) {
-                          form.setValue('maxSuccess', 1)
-                        }
-                      }}
+                      onCheckedChange={field.onChange}
+                      disabled={isGlobalEdit}
                     />
                   </FormControl>
                 </FormItem>
               )}
             />
+            <FormField
+              control={form.control}
+              name='models'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Models')}</FormLabel>
+                  <FormControl>
+                    <MultiSelect
+                      options={modelOptions}
+                      selected={field.value}
+                      onChange={field.onChange}
+                      allowCreate
+                      maxVisibleChips={5}
+                      placeholder={t('Select models')}
+                      disabled={allModels || isGlobalEdit}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+          {isGlobalEdit && (
+            <p className='text-muted-foreground text-sm'>
+              {t(
+                'The global rule always applies to all groups and all models.'
+              )}
+            </p>
           )}
+          <FormField
+            control={form.control}
+            name='unlimited'
+            render={({ field }) => (
+              <FormItem className='flex items-center justify-between gap-4'>
+                <div>
+                  <FormLabel>{t('Unlimited')}</FormLabel>
+                  <FormDescription>
+                    {t('An unlimited rule overrides less specific limits.')}
+                  </FormDescription>
+                </div>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={(checked) => {
+                      field.onChange(checked)
+                      if (checked) {
+                        form.setValue('maxRequests', 0)
+                        form.setValue('maxSuccess', 0)
+                      } else if (
+                        form.getValues('maxRequests') === 0 &&
+                        form.getValues('maxSuccess') === 0
+                      ) {
+                        form.setValue('maxSuccess', 1)
+                      }
+                    }}
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
           <FormField
             control={form.control}
             name='maxRequests'
@@ -353,7 +378,7 @@ export function RateLimitDialog(props: RateLimitDialogProps) {
                   <FormControl>
                     <Input
                       type='number'
-                      min={isGroupModel ? 0 : 1}
+                      min={0}
                       max={2147483647}
                       step={1}
                       {...field}
@@ -368,8 +393,8 @@ export function RateLimitDialog(props: RateLimitDialogProps) {
                   </span>
                 </div>
                 <FormDescription>
-                  {t('Only successful requests count toward this limit.')}
-                  {isGroupModel && <> {t('0 = unlimited')}</>}
+                  {t('Only successful requests count toward this limit.')}{' '}
+                  {t('0 = unlimited')}
                 </FormDescription>
                 <FormMessage />
               </FormItem>
