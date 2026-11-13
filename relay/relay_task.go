@@ -23,6 +23,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
@@ -350,6 +351,40 @@ func EstimateTaskSubmission(c *gin.Context, info *relaycommon.RelayInfo) (consta
 			noteTaskQuotaClamp(info, clamp)
 		}
 	}
+	// Register only after adaptor multipliers have been merged. Re-running
+	// validation or ModelPriceHelperPerCall here would lose those modifiers.
+	helper.SetFundingSourcePricing(c, info, func() (int, error) {
+		ratio := helper.HandleGroupRatio(c, info)
+		info.PriceData.GroupRatioInfo = ratio
+		if snapshot := info.TieredBillingSnapshot; snapshot != nil {
+			quota, err := common.QuotaRoundStrict(snapshot.EstimatedQuotaBeforeGroup * ratio.GroupRatio)
+			if err != nil {
+				return 0, err
+			}
+			snapshot.GroupRatio = ratio.GroupRatio
+			snapshot.EstimatedQuotaAfterGroup = quota
+			info.PriceData.Quota = quota
+			info.PriceData.QuotaToPreConsume = quota
+			return quota, nil
+		}
+		base := info.PriceData.ModelPrice
+		if !info.PriceData.UsePrice {
+			base = info.PriceData.ModelRatio / 2
+		}
+		quota, err := common.QuotaFromFloatStrict(base * common.QuotaPerUnit * ratio.GroupRatio)
+		if err != nil {
+			return 0, err
+		}
+		if !common.StringsContains(constant.TaskPricePatches, modelName) {
+			quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(quota))
+			var clamp *common.QuotaClamp
+			quota, clamp = common.QuotaFromFloatChecked(quotaWithRatios)
+			noteTaskQuotaClamp(info, clamp)
+		}
+		info.PriceData.Quota = quota
+		info.PriceData.FreeModel = !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && (ratio.GroupRatio == 0 || base == 0)
+		return quota, nil
+	})
 	return platform, adaptor, nil
 }
 

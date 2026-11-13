@@ -403,6 +403,24 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		channelId = relayInfo.ChannelId
 	}
 
+	prepareFunding := func(source string) *types.NewAPIError {
+		if !model.IsQuotaBucketBillingEnabled() || relayInfo.RepriceForFundingSource == nil {
+			return nil
+		}
+		quota, err := relayInfo.RepriceForFundingSource(source)
+		if err == nil && relayInfo.QuotaClamp != nil {
+			err = relayInfo.QuotaClamp
+		}
+		if err == nil && quota < 0 {
+			err = fmt.Errorf("pre-consume quota cannot be negative: %d", quota)
+		}
+		if err != nil {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		preConsumedQuota = quota
+		return nil
+	}
+
 	// 钱包路径需要先检查用户额度
 	tryWallet := func() (*BillingSession, *types.NewAPIError) {
 		// Honor subscription snapshots that disallow wallet fallback for this group.
@@ -415,6 +433,10 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 				fmt.Errorf("订阅额度不足，且当前分组不允许使用余额继续调用: using_group=%s", relayInfo.UsingGroup),
 				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
 				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
+
+		if apiErr := prepareFunding(BillingSourceWallet); apiErr != nil {
+			return nil, apiErr
 		}
 
 		userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
@@ -456,6 +478,9 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	}
 
 	trySubscription := func() (*BillingSession, *types.NewAPIError) {
+		if apiErr := prepareFunding(BillingSourceSubscription); apiErr != nil {
+			return nil, apiErr
+		}
 		subConsume := int64(preConsumedQuota)
 		if subConsume <= 0 {
 			subConsume = 1

@@ -89,10 +89,10 @@ func prepareImageStudioPlugin(c *gin.Context) (*pluginruntime.PinnedEndpoint, er
 }
 
 // estimateImageStudioPluginQuota validates a one-image copy without reserving funds.
-func estimateImageStudioPluginQuota(c *gin.Context, imageRequest *dto.ImageRequest) (int, string, string, bool, error) {
+func estimateImageStudioPluginQuota(c *gin.Context, imageRequest *dto.ImageRequest) (int, *relaycommon.RelayInfo, bool, error) {
 	generation := pluginruntime.DefaultRegistry.Generation()
 	if generation == nil {
-		return 0, "", "", false, nil
+		return 0, nil, false, nil
 	}
 	path := "/v1/images/generations"
 	if c.GetInt("relay_mode") == relayconstant.RelayModeImagesEdits {
@@ -103,16 +103,16 @@ func estimateImageStudioPluginQuota(c *gin.Context, imageRequest *dto.ImageReque
 		modelName = alias.Declared
 	}
 	if _, found := generation.LookupEndpoint(http.MethodPost, path, modelName); !found {
-		return 0, "", "", false, nil
+		return 0, nil, false, nil
 	}
 
 	storage, err := common.GetBodyStorage(c)
 	if err != nil {
-		return 0, "", "", false, err
+		return 0, nil, false, err
 	}
 	body, err := storage.Bytes()
 	if err != nil {
-		return 0, "", "", false, err
+		return 0, nil, false, err
 	}
 	bodyContext, _ := gin.CreateTestContext(httptest.NewRecorder())
 	bodyContext.Request = c.Request.Clone(c.Request.Context())
@@ -122,7 +122,7 @@ func estimateImageStudioPluginQuota(c *gin.Context, imageRequest *dto.ImageReque
 	bodyContext.Request.PostForm = nil
 	children, err := buildImageStudioTaskBodies(bodyContext, c.Request.Header.Get("Content-Type"), body, 1)
 	if err != nil {
-		return 0, "", "", false, err
+		return 0, nil, false, err
 	}
 	probe, _ := gin.CreateTestContext(httptest.NewRecorder())
 	probe.Keys = maps.Clone(c.Keys)
@@ -135,26 +135,26 @@ func estimateImageStudioPluginQuota(c *gin.Context, imageRequest *dto.ImageReque
 	probe.Request.Form = nil
 	bodyStorage, err := common.CreateBodyStorage(children[0].Body)
 	if err != nil {
-		return 0, "", "", false, err
+		return 0, nil, false, err
 	}
 	probe.Set(common.KeyBodyStorage, bodyStorage)
 	delete(probe.Keys, "_original_multipart_ct")
 	defer common.CleanupBodyStorage(probe)
 	pinned, err := prepareImageStudioPlugin(probe)
 	if err != nil || pinned == nil {
-		return 0, "", "", pinned != nil, err
+		return 0, nil, pinned != nil, err
 	}
 	info, err := relaycommon.GenRelayInfo(probe, types.RelayFormatTask, nil, nil)
 	if err != nil {
-		return 0, "", "", true, err
+		return 0, nil, true, err
 	}
 	info.OriginModelName = probe.GetString("resolved_task_model")
 	info.IsPlayground = true
 	_, _, taskErr := relay.EstimateTaskSubmission(probe, info)
 	if taskErr != nil {
-		return 0, "", "", true, errors.New(taskErr.Message)
+		return 0, nil, true, errors.New(taskErr.Message)
 	}
-	return info.PriceData.Quota, info.UsingGroup, info.BillingGroup, true, nil
+	return info.PriceData.Quota, info, true, nil
 }
 
 // persistImageStudioPluginSnapshot never changes lifecycle or billing columns.

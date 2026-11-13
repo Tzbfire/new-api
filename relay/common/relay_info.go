@@ -143,6 +143,10 @@ type RelayInfo struct {
 	// BillingSource indicates whether this request is billed from wallet quota or subscription.
 	// "" or "wallet" => wallet; "subscription" => subscription
 	BillingSource string
+	// RepriceForFundingSource selects the wallet bucket and refreshes its price
+	// before any reservation. Funding fallbacks must not reuse another source's
+	// discount. Installed by the pricing layer to keep service independent of it.
+	RepriceForFundingSource func(source string) (int, error) `json:"-"`
 	// SubscriptionId is the user_subscriptions.id used when BillingSource == "subscription"
 	SubscriptionId int
 	// SubscriptionPreConsumed is the amount pre-consumed on subscription item (quota units or 1)

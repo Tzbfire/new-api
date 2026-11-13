@@ -66,39 +66,39 @@ func estimateImageStudioBatchQuota(perImageQuota int, count uint) int {
 
 // estimateImageStudioPerImageQuota follows the same pricing path as execute-time
 // pre-consume, forced to n=1 so batch hold matches per-child billing.
-func estimateImageStudioPerImageQuota(c *gin.Context, imageRequest *dto.ImageRequest) (quota int, usingGroup string, billingGroup string, err error) {
+func estimateImageStudioPerImageQuota(c *gin.Context, imageRequest *dto.ImageRequest) (quota int, pricingInfo *relaycommon.RelayInfo, err error) {
 	if imageRequest == nil {
-		return 0, "", "", fmt.Errorf("invalid image request")
+		return 0, nil, fmt.Errorf("invalid image request")
 	}
-	if quota, group, billingGroup, claimed, pluginErr := estimateImageStudioPluginQuota(c, imageRequest); claimed || pluginErr != nil {
-		return quota, group, billingGroup, pluginErr
+	if quota, info, claimed, pluginErr := estimateImageStudioPluginQuota(c, imageRequest); claimed || pluginErr != nil {
+		return quota, info, pluginErr
 	}
 	one := uint(1)
 	imageRequest.N = &one
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatOpenAIImage, imageRequest, nil)
 	if err != nil {
-		return 0, "", "", err
+		return 0, nil, err
 	}
 	relayInfo.InitChannelMeta(c)
 	billingInput, err := helper.BuildBillingExprRequestInputFromRequest(imageRequest, relayInfo.RequestHeaders)
 	if err != nil {
-		return 0, "", "", err
+		return 0, nil, err
 	}
 	relayInfo.BillingRequestInput = &billingInput
 	meta := imageRequest.GetTokenCountMeta()
 	tokens, err := service.EstimateRequestToken(c, meta, relayInfo)
 	if err != nil {
-		return 0, "", "", err
+		return 0, nil, err
 	}
 	relayInfo.SetEstimatePromptTokens(tokens)
 	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
 	if err != nil {
-		return 0, "", "", err
+		return 0, nil, err
 	}
 	if priceData.QuotaToPreConsume < 0 {
-		return 0, relayInfo.UsingGroup, relayInfo.BillingGroup, nil
+		return 0, relayInfo, nil
 	}
-	return priceData.QuotaToPreConsume, relayInfo.UsingGroup, relayInfo.BillingGroup, nil
+	return priceData.QuotaToPreConsume, relayInfo, nil
 }
 
 // EstimateImageStudioCost follows the same pricing path used immediately
@@ -145,13 +145,13 @@ func EstimateImageStudioCost(c *gin.Context) {
 	} else {
 		c.Set("relay_mode", relayconstant.RelayModeImagesGenerations)
 	}
-	perImageQuota, usingGroup, _, err := estimateImageStudioPerImageQuota(c, imageRequest)
+	perImageQuota, pricingInfo, err := estimateImageStudioPerImageQuota(c, imageRequest)
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
 	estimatedQuota := estimateImageStudioBatchQuota(perImageQuota, count)
-	resolvedGroup := usingGroup
+	resolvedGroup := pricingInfo.UsingGroup
 	if autoGroup := c.GetString("auto_group"); autoGroup != "" {
 		resolvedGroup = autoGroup
 	}
@@ -252,15 +252,15 @@ func CreateImageStudioTask(c *gin.Context) {
 
 	// Funding hold at submit so concurrent batches cannot oversell quota/subscription.
 	// Uses the same billing preference path as normal relay (subscription_first, etc.).
-	perImageQuota, usingGroup, billingGroup, err := estimateImageStudioPerImageQuota(c, imageRequest)
+	perImageQuota, pricingInfo, err := estimateImageStudioPerImageQuota(c, imageRequest)
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
-	if usingGroup != "" {
-		relayInfo.UsingGroup = usingGroup
+	if pricingInfo.UsingGroup != "" {
+		relayInfo.UsingGroup = pricingInfo.UsingGroup
 	}
-	relayInfo.BillingGroup = billingGroup
+	relayInfo.BillingGroup = pricingInfo.BillingGroup
 
 	batchID := "batch_" + common.GetUUID()
 	now := time.Now().Unix()
@@ -326,8 +326,8 @@ func CreateImageStudioTask(c *gin.Context) {
 		task.PrivateData.NodeName = common.NodeName
 		task.PrivateData.TokenId = 0
 		if perImageQuota > 0 {
-			relayInfo.RequestId = childRequestID
-			hold, holdErr := service.PreHoldImageStudioBilling(c, relayInfo, perImageQuota)
+			pricingInfo.RequestId = childRequestID
+			hold, holdErr := service.PreHoldImageStudioBilling(c, pricingInfo, perImageQuota)
 			if holdErr != nil {
 				common.ApiErrorMsg(c, holdErr.Error())
 				return

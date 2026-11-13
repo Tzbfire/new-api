@@ -1,4 +1,4 @@
-package helper
+package helper_test
 
 import (
 	"fmt"
@@ -13,12 +13,16 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -41,12 +45,15 @@ func TestFundingFallbackBucketPricing(t *testing.T) {
 	oldRedis, oldBatch := common.RedisEnabled, common.BatchUpdateEnabled
 	oldBuckets, oldPaidGroup := setting.QuotaBucketBillingEnabled, setting.PaidQuotaBillingGroup
 	oldQuotaPerUnit := common.QuotaPerUnit
+	oldPrices, oldRatios := ratio_setting.ModelPrice2JSONString(), ratio_setting.ModelRatio2JSONString()
 	t.Cleanup(func() {
 		model.DB, model.LOG_DB = oldDB, oldLogDB
 		common.SetDatabaseTypes(oldMainType, oldLogType)
 		common.RedisEnabled, common.BatchUpdateEnabled = oldRedis, oldBatch
 		setting.QuotaBucketBillingEnabled, setting.PaidQuotaBillingGroup = oldBuckets, oldPaidGroup
 		common.QuotaPerUnit = oldQuotaPerUnit
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(oldPrices))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(oldRatios))
 		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
 	})
 	common.RedisEnabled, common.BatchUpdateEnabled = false, false
@@ -54,11 +61,14 @@ func TestFundingFallbackBucketPricing(t *testing.T) {
 	common.QuotaPerUnit = 500000
 	require.NoError(t, i18n.Init())
 	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
-		"billing_setting.billing_mode":          `{"funding-fixed":"tiered_expr"}`,
-		"billing_setting.billing_expr":          `{"funding-fixed":"tier(\"request\", fixed(0.080326))"}`,
+		"billing_setting.billing_mode":          `{"funding-fixed":"tiered_expr","funding-task-expr":"tiered_expr"}`,
+		"billing_setting.billing_expr":          `{"funding-fixed":"tier(\"request\", fixed(0.080326))","funding-task-expr":"tier(\"task\", u(\"seconds\") * 0.0200815)"}`,
 		"group_ratio_setting.group_ratio":       `{"Team/Plus":1}`,
 		"group_ratio_setting.group_group_ratio": `{"vip":{"Team/Plus":0.5}}`,
 	}))
+
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"funding-image":0.080326,"funding-task":0.0200815}`))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"funding-token":1}`))
 
 	var dialector gorm.Dialector
 	switch os.Getenv("NEWAPI_TEST_DB") {
@@ -82,29 +92,34 @@ func TestFundingFallbackBucketPricing(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.UserQuotaBucket{}, &model.UserQuotaBucketTransaction{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}))
 
 	for _, tc := range []struct {
-		name                                 string
-		pref                                 string
-		subRemaining                         int64
-		defaultQuota, vipQuota               int
-		blockOverflow, pinDefault, wantError bool
-		wantSource, wantGroup                string
-		wantQuota                            int
+		name, pref, pricing                          string
+		subRemaining                                 int64
+		defaultQuota, vipQuota                       int
+		blockOverflow, pinDefault, wantError, refund bool
+		wantSource, wantGroup                        string
+		wantQuota                                    int
 	}{
-		{"reported subscription fallback", "subscription_first", 17579, 34869, 27497112, false, false, false, "wallet", "vip", 20082},
-		{"subscription still wins when sufficient", "subscription_first", 50000, 34869, 27497112, false, false, false, "subscription", "", 40163},
-		{"insufficient VIP uses ordinary price", "subscription_first", 17579, 50000, 100, false, false, false, "wallet", "", 40163},
-		{"neither wallet bucket suffices", "subscription_first", 17579, 34869, 100, false, false, true, "", "", 0},
-		{"overflow disabled", "subscription_first", 17579, 34869, 27497112, true, false, true, "", "", 0},
-		{"subscription only", "subscription_only", 17579, 34869, 27497112, false, false, true, "", "", 0},
-		{"pinned ordinary bucket", "subscription_first", 17579, 34869, 27497112, false, true, true, "", "", 0},
-		{"wallet first", "wallet_first", 50000, 34869, 27497112, false, false, false, "wallet", "vip", 20082},
+		{name: "reported subscription fallback", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, wantSource: "wallet", wantGroup: "vip", wantQuota: 20082},
+		{name: "subscription still wins when sufficient", pref: "subscription_first", subRemaining: 50000, defaultQuota: 34869, vipQuota: 27497112, wantSource: "subscription", wantQuota: 40163},
+		{name: "insufficient VIP uses ordinary price", pref: "subscription_first", subRemaining: 17579, defaultQuota: 50000, vipQuota: 100, wantSource: "wallet", wantQuota: 40163},
+		{name: "neither wallet bucket suffices", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 100, wantError: true},
+		{name: "overflow disabled", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, blockOverflow: true, wantError: true},
+		{name: "subscription only", pref: "subscription_only", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, wantError: true},
+		{name: "pinned ordinary bucket", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, pinDefault: true, wantError: true},
+		{name: "wallet first", pref: "wallet_first", subRemaining: 50000, defaultQuota: 34869, vipQuota: 27497112, wantSource: "wallet", wantGroup: "vip", wantQuota: 20082},
+		{name: "wallet fallback restores subscription price", pref: "wallet_first", subRemaining: 50000, defaultQuota: 34869, vipQuota: 27497112, blockOverflow: true, wantSource: "subscription", wantQuota: 40163},
+		{name: "token pricing and refund", pricing: "token", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, wantSource: "wallet", wantGroup: "vip", wantQuota: 20081, refund: true},
+		{name: "image pricing", pricing: "image", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, wantSource: "wallet", wantGroup: "vip", wantQuota: 20081},
+		{name: "studio hold", pricing: "studio", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, wantSource: "wallet", wantGroup: "vip", wantQuota: 20081},
+		{name: "task legacy modifiers", pricing: "task", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, wantSource: "wallet", wantGroup: "vip", wantQuota: 20080},
+		{name: "task expression", pricing: "task-expr", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, wantSource: "wallet", wantGroup: "vip", wantQuota: 20082},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			requestID := fmt.Sprintf("funding-%d", time.Now().UnixNano())
 			user := &model.User{Username: requestID, Quota: tc.defaultQuota, Status: common.UserStatusEnabled}
 			require.NoError(t, db.Create(user).Error)
 			t.Cleanup(func() {
-				for _, row := range []any{&model.SubscriptionPreConsumeRecord{}, &model.UserSubscription{}, &model.UserQuotaBucketTransaction{}, &model.UserQuotaBucket{}} {
+				for _, row := range []any{&model.Token{}, &model.SubscriptionPreConsumeRecord{}, &model.UserSubscription{}, &model.UserQuotaBucketTransaction{}, &model.UserQuotaBucket{}} {
 					require.NoError(t, db.Where("user_id = ?", user.Id).Delete(row).Error)
 				}
 				require.NoError(t, db.Unscoped().Delete(user).Error)
@@ -121,38 +136,115 @@ func TestFundingFallbackBucketPricing(t *testing.T) {
 				ctx.Set(string(constant.ContextKeyQuotaBucketBillingGroup), "")
 			}
 			info := &relaycommon.RelayInfo{UserId: user.Id, UserGroup: "default", UsingGroup: "Team/Plus", OriginModelName: "funding-fixed", RequestId: requestID, ForcePreConsume: true, IsPlayground: true, UserSetting: dto.UserSetting{BillingPreference: tc.pref}, BillingRequestInput: &billingexpr.RequestInput{}}
-			price, err := ModelPriceHelper(ctx, info, 0, &types.TokenCountMeta{})
-			require.NoError(t, err)
-			session, apiErr := service.NewBillingSession(ctx, info, price.QuotaToPreConsume)
+			token := &model.Token{UserId: user.Id, Key: requestID, Status: common.TokenStatusEnabled, RemainQuota: 100000}
+			require.NoError(t, db.Create(token).Error)
+			info.IsPlayground = false
+			info.TokenId, info.TokenKey = token.Id, token.Key
+			var quota int
+			switch tc.pricing {
+			case "task", "task-expr":
+				info.OriginModelName = "funding-" + tc.pricing
+				ctx.Set("task_request", map[string]any{"prompt": "test"})
+				common.SetContextKey(ctx, constant.ContextKeyChannelBaseUrl, "https://provider.example")
+				registry := pluginruntime.NewRegistry()
+				plugin, err := registry.Register(`
+export const meta = {apiVersion:1,key:"funding-test",name:"Funding Test",version:"1.0.0",author:{name:"Test"},models:["funding-task","funding-task-expr"],fetchMode:"per_task",usageSchema:{seconds:{type:"number",unit:"second",description:{en:"Video generation unit price",zh:"视频生成单价"}}}};
+export function buildSubmitRequest(ctx){return {url:ctx.baseUrl+"/submit",method:"POST",body:{model:ctx.model},action:"text_to_video"};}
+export function parseSubmitResponse(){return {taskId:"1"};}
+export function buildQueryRequest(){return {url:"https://provider.example/query"};}
+export function parseTaskResult(){return {status:"SUCCESS"};}
+export function extractUsage(){return {seconds:4};}
+`, pluginruntime.Options{})
+				require.NoError(t, err)
+				ctx.Set(pluginruntime.ContextKeyPinnedPlugin, pluginruntime.PinnedPlugin{Generation: registry.Generation(), Plugin: plugin})
+				_, _, taskErr := relay.EstimateTaskSubmission(ctx, info)
+				require.Nil(t, taskErr)
+				quota = info.PriceData.Quota
+			default:
+				prompt := 0
+				if tc.pricing == "token" {
+					info.OriginModelName, prompt = "funding-token", 40163
+				}
+				if tc.pricing == "image" || tc.pricing == "studio" {
+					info.OriginModelName = "funding-image"
+					one := uint(1)
+					info.Request = &dto.ImageRequest{Model: info.OriginModelName, N: &one}
+				}
+				price, err := helper.ModelPriceHelper(ctx, info, prompt, &types.TokenCountMeta{})
+				require.NoError(t, err)
+				quota = price.QuotaToPreConsume
+			}
+			var session relaycommon.BillingSettler
+			var apiErr *types.NewAPIError
+			if tc.pricing == "studio" {
+				hold, holdErr := service.PreHoldImageStudioBilling(ctx, info, quota)
+				require.Nil(t, holdErr)
+				assert.Equal(t, tc.wantSource, hold.Source)
+				assert.Equal(t, tc.wantGroup, hold.BillingGroup)
+				assert.Equal(t, tc.wantQuota, hold.Quota)
+				require.NoError(t, model.RefundUserQuotaBuckets(requestID))
+			} else {
+				session, apiErr = service.NewBillingSession(ctx, info, quota)
+			}
+			spent := 0
 			if tc.wantError {
 				require.NotNil(t, apiErr)
 				assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)
 				assert.Equal(t, types.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
-			} else {
+			} else if tc.pricing != "studio" {
 				require.Nil(t, apiErr, "funding fallback must succeed with sufficient selected bucket: %v", apiErr)
 				require.NotNil(t, session)
 				assert.Equal(t, tc.wantSource, info.BillingSource)
 				assert.Equal(t, tc.wantGroup, info.BillingGroup)
 				assert.Equal(t, tc.wantQuota, session.GetPreConsumedQuota())
-				assert.Equal(t, tc.wantQuota, info.PriceData.QuotaToPreConsume)
-				assert.Equal(t, tc.wantQuota, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+				if tc.pricing == "task" || tc.pricing == "task-expr" {
+					assert.Equal(t, tc.wantQuota, info.PriceData.Quota)
+				} else {
+					assert.Equal(t, tc.wantQuota, info.PriceData.QuotaToPreConsume)
+				}
+				if info.TieredBillingSnapshot != nil {
+					assert.Equal(t, tc.wantQuota, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+					assert.Equal(t, info.PriceData.GroupRatioInfo.GroupRatio, info.TieredBillingSnapshot.GroupRatio)
+				}
 				if tc.wantGroup == "vip" {
 					assert.Equal(t, 0.5, info.PriceData.GroupRatioInfo.GroupRatio)
-					assert.Equal(t, 0.5, info.TieredBillingSnapshot.GroupRatio)
 				}
-				// Settlement must debit the same bucket, then returning the charge
-				// to zero must restore the exact starting balances.
-				require.NoError(t, session.Settle(0))
+				if tc.pricing == "task" {
+					assert.Equal(t, float64(4), info.PriceData.OtherRatios()["seconds"])
+				}
+				if tc.refund {
+					session.Refund(ctx)
+					require.Eventually(t, func() bool {
+						var after model.Token
+						return db.First(&after, token.Id).Error == nil && after.RemainQuota == token.RemainQuota
+					}, 3*time.Second, 5*time.Millisecond)
+				} else {
+					spent = tc.wantQuota + 10
+					require.NoError(t, session.Settle(spent))
+					require.NoError(t, session.Settle(spent))
+				}
 			}
 			balance, err := model.GetUserQuotaBucketBalance(user.Id, "default")
 			require.NoError(t, err)
-			assert.Equal(t, tc.defaultQuota, balance)
+			wantDefault, wantVIP := tc.defaultQuota, tc.vipQuota
+			wantSubUsed := sub.AmountUsed
+			if tc.wantSource == "subscription" {
+				wantSubUsed += int64(spent)
+			} else if tc.wantGroup == "vip" {
+				wantVIP -= spent
+			} else {
+				wantDefault -= spent
+			}
+			assert.Equal(t, wantDefault, balance)
 			balance, err = model.GetUserQuotaBucketBalance(user.Id, "vip")
 			require.NoError(t, err)
-			assert.Equal(t, tc.vipQuota, balance)
+			assert.Equal(t, wantVIP, balance)
 			var after model.UserSubscription
 			require.NoError(t, db.First(&after, sub.Id).Error)
-			assert.Equal(t, sub.AmountUsed, after.AmountUsed)
+			assert.Equal(t, wantSubUsed, after.AmountUsed)
+			var tokenAfter model.Token
+			require.NoError(t, db.First(&tokenAfter, token.Id).Error)
+			assert.Equal(t, token.RemainQuota-spent, tokenAfter.RemainQuota)
 		})
 	}
 }

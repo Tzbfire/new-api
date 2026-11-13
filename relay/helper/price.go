@@ -41,6 +41,14 @@ func quotaBucketBillingAppliesToWallet(info *relaycommon.RelayInfo) bool {
 	if info == nil || !setting.QuotaBucketBillingEnabled {
 		return false
 	}
+	// Once a funding attempt is selected, it takes precedence over the initial
+	// preference: an active but exhausted subscription may fall back to wallet.
+	switch info.BillingSource {
+	case "wallet":
+		return true
+	case "subscription":
+		return false
+	}
 	pref := common.NormalizeBillingPreference(info.UserSetting.BillingPreference)
 	switch pref {
 	case "subscription_only":
@@ -66,6 +74,10 @@ func PrepareQuotaBucketBillingGroup(ctx *gin.Context, info *relaycommon.RelayInf
 			return
 		}
 	}
+	if info == nil {
+		return
+	}
+	info.BillingGroup = ""
 	if !quotaBucketBillingAppliesToWallet(info) {
 		return
 	}
@@ -140,7 +152,41 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hostty
 	return groupRatioInfo
 }
 
+// SetFundingSourcePricing connects a request's complete pricing calculation to
+// funding selection. The calculation must include request/task multipliers and
+// refresh PriceData and any snapshot used for settlement.
+func SetFundingSourcePricing(c *gin.Context, info *relaycommon.RelayInfo, calculate func() (int, error)) {
+	info.RepriceForFundingSource = func(source string) (int, error) {
+		info.BillingSource = source
+		PrepareQuotaBucketBillingGroup(c, info)
+		quota, err := calculate()
+		if err == nil && FallbackQuotaBucketBillingGroup(c, info, quota) {
+			return calculate()
+		}
+		return quota, err
+	}
+}
+
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (hosttypes.PriceData, error) {
+	SetFundingSourcePricing(c, info, func() (int, error) {
+		// Keep the estimated expression and request facts frozen; only the
+		// funding group's multiplier changes during fallback.
+		if snapshot := info.TieredBillingSnapshot; snapshot != nil {
+			ratio := HandleGroupRatio(c, info)
+			quota, err := billingexpr.QuotaRoundStrict(snapshot.EstimatedQuotaBeforeGroup * ratio.GroupRatio)
+			if err != nil {
+				return 0, err
+			}
+			snapshot.GroupRatio = ratio.GroupRatio
+			snapshot.EstimatedQuotaAfterGroup = quota
+			info.PriceData.GroupRatioInfo = ratio
+			info.PriceData.QuotaToPreConsume = quota
+			info.PriceData.FreeModel = !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && ratio.GroupRatio == 0
+			return quota, nil
+		}
+		data, err := modelPriceHelper(c, info, promptTokens, meta)
+		return data.QuotaToPreConsume, err
+	})
 	PrepareQuotaBucketBillingGroup(c, info)
 	data, err := modelPriceHelper(c, info, promptTokens, meta)
 	if err == nil && FallbackQuotaBucketBillingGroup(c, info, data.QuotaToPreConsume) {

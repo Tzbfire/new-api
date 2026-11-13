@@ -2,7 +2,12 @@
 # Seed a disposable CI database using the previous deployed-compatible main.
 set -euo pipefail
 legacy_checkout="${RUNNER_TEMP:?}/newapi-before-manyou-20261030"
-git worktree add --detach "$legacy_checkout" 1407c583acd9d75fe8b7a44cfb73b344d11224ca
+legacy_revision=1407c583acd9d75fe8b7a44cfb73b344d11224ca
+# Branch cleanup can leave the deployed revision outside checkout's ref graph.
+if ! git cat-file -e "$legacy_revision^{commit}" 2>/dev/null; then
+    git fetch --no-tags origin "$legacy_revision"
+fi
+git worktree add --detach "$legacy_checkout" "$legacy_revision"
 trap 'git worktree remove --force "$legacy_checkout"' EXIT
 cat > "$legacy_checkout/model/merge_upgrade_fixture_test.go" <<'GO'
 package model
