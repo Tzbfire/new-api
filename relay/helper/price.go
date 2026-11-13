@@ -168,31 +168,54 @@ func SetFundingSourcePricing(c *gin.Context, info *relaycommon.RelayInfo, calcul
 }
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (hosttypes.PriceData, error) {
+	PrepareQuotaBucketBillingGroup(c, info)
+	data, err := modelPriceHelper(c, info, promptTokens, meta)
+	if err == nil && FallbackQuotaBucketBillingGroup(c, info, data.QuotaToPreConsume) {
+		data, err = modelPriceHelper(c, info, promptTokens, meta)
+	}
+	if err != nil {
+		return data, err
+	}
+
+	// Freeze the unrounded base, including a zero group ratio. Scaling an
+	// already rounded quota loses precision and cannot recover from free groups.
+	quotaBeforeGroup := data.ModelPrice * common.QuotaPerUnit
+	if !data.UsePrice && info.TieredBillingSnapshot == nil {
+		multiplier, err := operation_setting.InputPreConsumeMultiplier()
+		if err != nil {
+			return hosttypes.PriceData{}, err
+		}
+		quotaBeforeGroup = float64(promptTokens) * multiplier * data.ModelRatio
+	}
 	SetFundingSourcePricing(c, info, func() (int, error) {
-		// Keep the estimated expression and request facts frozen; only the
-		// funding group's multiplier changes during fallback.
+		ratio := HandleGroupRatio(c, info)
+		var quota int
+		var err error
+		freeModel := false
 		if snapshot := info.TieredBillingSnapshot; snapshot != nil {
-			ratio := HandleGroupRatio(c, info)
-			quota, err := billingexpr.QuotaRoundStrict(snapshot.EstimatedQuotaBeforeGroup * ratio.GroupRatio)
+			// Expression and request facts stay frozen, including per-attempt
+			// image quantities refreshed by PrepareImageBillingForRequest.
+			quota, err = billingexpr.QuotaRoundStrict(snapshot.EstimatedQuotaBeforeGroup * ratio.GroupRatio)
 			if err != nil {
 				return 0, err
 			}
 			snapshot.GroupRatio = ratio.GroupRatio
 			snapshot.EstimatedQuotaAfterGroup = quota
-			info.PriceData.GroupRatioInfo = ratio
-			info.PriceData.QuotaToPreConsume = quota
-			info.PriceData.FreeModel = !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && ratio.GroupRatio == 0
-			return quota, nil
+		} else {
+			// Keep current modifiers: outbound image quantity can differ from
+			// the frozen client's n, so rebuilding PriceData would under-reserve.
+			quota, err = common.QuotaFromFloatStrict(info.PriceData.ApplyOtherRatiosToFloat(quotaBeforeGroup * ratio.GroupRatio))
+			if err != nil {
+				return 0, err
+			}
+			freeModel = (data.UsePrice && data.ModelPrice == 0) || (!data.UsePrice && data.ModelRatio == 0)
 		}
-		data, err := modelPriceHelper(c, info, promptTokens, meta)
-		return data.QuotaToPreConsume, err
+		info.PriceData.GroupRatioInfo = ratio
+		info.PriceData.QuotaToPreConsume = quota
+		info.PriceData.FreeModel = !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && (ratio.GroupRatio == 0 || freeModel)
+		return quota, nil
 	})
-	PrepareQuotaBucketBillingGroup(c, info)
-	data, err := modelPriceHelper(c, info, promptTokens, meta)
-	if err == nil && FallbackQuotaBucketBillingGroup(c, info, data.QuotaToPreConsume) {
-		return modelPriceHelper(c, info, promptTokens, meta)
-	}
-	return data, err
+	return data, nil
 }
 
 func modelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (hosttypes.PriceData, error) {

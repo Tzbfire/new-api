@@ -110,6 +110,7 @@ func TestFundingFallbackBucketPricing(t *testing.T) {
 		{name: "wallet fallback restores subscription price", pref: "wallet_first", subRemaining: 50000, defaultQuota: 34869, vipQuota: 27497112, blockOverflow: true, wantSource: "subscription", wantQuota: 40163},
 		{name: "token pricing and refund", pricing: "token", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, wantSource: "wallet", wantGroup: "vip", wantQuota: 20081, refund: true},
 		{name: "image pricing", pricing: "image", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, wantSource: "wallet", wantGroup: "vip", wantQuota: 20081},
+		{name: "outbound image quantity", pricing: "image-override", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, wantSource: "wallet", wantGroup: "vip", wantQuota: 40163},
 		{name: "studio hold", pricing: "studio", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, wantSource: "wallet", wantGroup: "vip", wantQuota: 20081},
 		{name: "task legacy modifiers", pricing: "task", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, wantSource: "wallet", wantGroup: "vip", wantQuota: 20080},
 		{name: "task expression", pricing: "task-expr", pref: "subscription_first", subRemaining: 17579, defaultQuota: 34869, vipQuota: 27497112, wantSource: "wallet", wantGroup: "vip", wantQuota: 20082},
@@ -143,6 +144,7 @@ func TestFundingFallbackBucketPricing(t *testing.T) {
 			var quota int
 			switch tc.pricing {
 			case "task", "task-expr":
+				info.TaskRelayInfo = &relaycommon.TaskRelayInfo{}
 				info.OriginModelName = "funding-" + tc.pricing
 				ctx.Set("task_request", map[string]any{"prompt": "test"})
 				common.SetContextKey(ctx, constant.ContextKeyChannelBaseUrl, "https://provider.example")
@@ -165,7 +167,7 @@ export function extractUsage(){return {seconds:4};}
 				if tc.pricing == "token" {
 					info.OriginModelName, prompt = "funding-token", 40163
 				}
-				if tc.pricing == "image" || tc.pricing == "studio" {
+				if tc.pricing == "image" || tc.pricing == "image-override" || tc.pricing == "studio" {
 					info.OriginModelName = "funding-image"
 					one := uint(1)
 					info.Request = &dto.ImageRequest{Model: info.OriginModelName, N: &one}
@@ -183,6 +185,9 @@ export function extractUsage(){return {seconds:4};}
 				assert.Equal(t, tc.wantGroup, hold.BillingGroup)
 				assert.Equal(t, tc.wantQuota, hold.Quota)
 				require.NoError(t, model.RefundUserQuotaBuckets(requestID))
+			} else if tc.pricing == "image-override" {
+				apiErr = service.PrepareImageBillingForRequest(ctx, info, 2)
+				session = info.Billing
 			} else {
 				session, apiErr = service.NewBillingSession(ctx, info, quota)
 			}
