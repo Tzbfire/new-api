@@ -143,6 +143,8 @@ jobs:
         run: go test ./model -run '^TestQuotaBucketStartupMigrationCompatibility$' -count=1
       - name: Verify bucket accounting and affiliate rebates
         run: NEWAPI_TEST_MODE= go test ./model -run 'Test(QuotaBucket|CreditUserQuotaBucket|DebitUserQuotaBuckets|PurchaseSubscriptionWithWallet|PurchaseSubscriptionWithBalanceDelegates|AffiliateUsageRebate)' -count=1
+      - name: Verify subscription fallback pricing and bucket accounting
+        run: go test ./relay/helper -run '^TestFundingFallbackBucketPricing$' -count=1 -v
       - name: Verify atomic check-in with ordinary and VIP buckets
         if: matrix.mode == 'fresh'
         env:
